@@ -3,12 +3,41 @@ import { BrowserMultiFormatReader, IScannerControls } from '@zxing/browser';
 import { BarcodeFormat, DecodeHintType } from '@zxing/library';
 import { BarcodeScannerState } from '../types/product';
 
+/**
+ * Hàm toàn cục ngắt triệt để mọi luồng MediaStream camera đang chạy ngầm trên thiết bị.
+ * Đảm bảo giải phóng phần cứng camera, tắt đèn camera và chống hao pin, nóng máy.
+ */
+export const stopAllCameraMediaTracks = () => {
+  try {
+    document.querySelectorAll('video').forEach((v) => {
+      if (v.srcObject) {
+        try {
+          const stream = v.srcObject as MediaStream;
+          stream.getTracks().forEach((track) => {
+            track.stop();
+            track.enabled = false;
+          });
+          v.srcObject = null;
+          v.pause();
+          v.removeAttribute('src');
+        } catch (e) {
+          console.warn('Lỗi khi dừng video track:', e);
+        }
+      }
+    });
+  } catch (err) {
+    console.warn('Lỗi khi ngắt tất cả camera tracks:', err);
+  }
+};
+
 export const useBarcodeScanner = (
   onDetected?: (barcode: string) => void
 ): BarcodeScannerState => {
   const videoRef = useRef<HTMLVideoElement | null>(null);
+  const streamRef = useRef<MediaStream | null>(null);
   const readerRef = useRef<BrowserMultiFormatReader | null>(null);
   const controlsRef = useRef<IScannerControls | null>(null);
+  const isMountedRef = useRef<boolean>(true);
 
   const [barcode, setBarcode] = useState<string | null>(null);
   const [scanning, setScanning] = useState<boolean>(false);
@@ -16,8 +45,8 @@ export const useBarcodeScanner = (
 
   // Initialize ZXing reader with barcode formats
   useEffect(() => {
+    isMountedRef.current = true;
     const hints = new Map<DecodeHintType, any>();
-    // Support common retail 1D & 2D formats
     hints.set(DecodeHintType.POSSIBLE_FORMATS, [
       BarcodeFormat.EAN_13,
       BarcodeFormat.EAN_8,
@@ -33,8 +62,13 @@ export const useBarcodeScanner = (
     readerRef.current = new BrowserMultiFormatReader(hints);
 
     return () => {
+      isMountedRef.current = false;
       if (controlsRef.current) {
-        controlsRef.current.stop();
+        try {
+          controlsRef.current.stop();
+        } catch {
+          // ignore
+        }
         controlsRef.current = null;
       }
       readerRef.current = null;
@@ -42,25 +76,61 @@ export const useBarcodeScanner = (
   }, []);
 
   const stopScan = useCallback(() => {
+    isMountedRef.current = false;
+
+    // 1. Dừng bộ điều khiển giải mã ZXing
     if (controlsRef.current) {
       try {
         controlsRef.current.stop();
       } catch (e) {
-        console.warn('Error stopping scanner controls:', e);
+        console.warn('Lỗi khi dừng scanner controls:', e);
       }
       controlsRef.current = null;
     }
 
-    if (videoRef.current && videoRef.current.srcObject) {
-      const stream = videoRef.current.srcObject as MediaStream;
-      stream.getTracks().forEach((track) => track.stop());
-      videoRef.current.srcObject = null;
+    // 2. Dừng trực tiếp luồng camera lưu trong streamRef (bất kể videoRef còn hay mất)
+    if (streamRef.current) {
+      try {
+        streamRef.current.getTracks().forEach((track) => {
+          track.stop();
+          track.enabled = false;
+        });
+      } catch (e) {
+        console.warn('Lỗi khi dừng stream tracks:', e);
+      }
+      streamRef.current = null;
     }
+
+    // 3. Dừng luồng gắn trên thẻ video nếu có
+    if (videoRef.current) {
+      if (videoRef.current.srcObject) {
+        try {
+          const stream = videoRef.current.srcObject as MediaStream;
+          stream.getTracks().forEach((track) => {
+            track.stop();
+            track.enabled = false;
+          });
+        } catch (e) {
+          console.warn('Lỗi khi dừng video tracks:', e);
+        }
+        videoRef.current.srcObject = null;
+      }
+      try {
+        videoRef.current.pause();
+        videoRef.current.removeAttribute('src');
+      } catch {
+        // ignore
+      }
+    }
+
+    // 4. Quét dọn toàn cục các video tracks còn sót lại
+    stopAllCameraMediaTracks();
 
     setScanning(false);
   }, []);
 
   const startScan = useCallback(async () => {
+    isMountedRef.current = true;
     setError(null);
     setBarcode(null);
 
@@ -89,6 +159,8 @@ export const useBarcodeScanner = (
     try {
       // List video devices
       const videoInputDevices = await BrowserMultiFormatReader.listVideoInputDevices();
+      if (!isMountedRef.current) return;
+
       if (!videoInputDevices || videoInputDevices.length === 0) {
         setError('Không tìm thấy camera trên thiết bị.');
         return;
@@ -128,13 +200,35 @@ export const useBarcodeScanner = (
               }
             }
             if (err && !(err.name === 'NotFoundException')) {
-              // Non-critical frame decode error, only log if not NotFoundException
-              // console.debug('Decode frame:', err.message);
+              // Non-critical frame decode error
             }
           }
         );
 
+        // Kiểm tra an toàn: Nếu người dùng đã thoát khỏi màn hình trong khi camera đang kết nối, lập tức ngắt ngay!
+        if (!isMountedRef.current) {
+          try {
+            controls.stop();
+          } catch {}
+          if (videoRef.current?.srcObject) {
+            try {
+              (videoRef.current.srcObject as MediaStream).getTracks().forEach((t) => {
+                t.stop();
+                t.enabled = false;
+              });
+              videoRef.current.srcObject = null;
+            } catch {}
+          }
+          stopAllCameraMediaTracks();
+          return;
+        }
+
         controlsRef.current = controls;
+
+        // Lưu stream vào streamRef để dọn dẹp chắc chắn
+        if (videoRef.current?.srcObject) {
+          streamRef.current = videoRef.current.srcObject as MediaStream;
+        }
       }
     } catch (err: any) {
       console.error('Failed to start scanner:', err);
@@ -154,10 +248,25 @@ export const useBarcodeScanner = (
     }
   }, [onDetected, stopScan]);
 
-  // Clean up on unmount
+  // Clean up on unmount và khi đổi tab trình duyệt / ẩn ứng dụng
   useEffect(() => {
+    isMountedRef.current = true;
+
+    const handleVisibilityChange = () => {
+      if (document.hidden) {
+        stopScan();
+      }
+    };
+
+    document.addEventListener('visibilitychange', handleVisibilityChange);
+    window.addEventListener('pagehide', stopScan);
+
     return () => {
+      isMountedRef.current = false;
+      document.removeEventListener('visibilitychange', handleVisibilityChange);
+      window.removeEventListener('pagehide', stopScan);
       stopScan();
+      stopAllCameraMediaTracks();
     };
   }, [stopScan]);
 

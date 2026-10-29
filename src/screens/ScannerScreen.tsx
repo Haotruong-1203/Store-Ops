@@ -3,7 +3,7 @@ import { motion, AnimatePresence } from 'motion/react';
 import { Header, InputGroup, Card } from '../components/SharedUI';
 import { Product, ExpiryRecord, ProductData } from '../types/product';
 import { formatDate, calculateDestructionDate, getProductRecords } from '../lib/utils';
-import { useBarcodeScanner } from '../hooks/useBarcodeScanner';
+import { useBarcodeScanner, stopAllCameraMediaTracks } from '../hooks/useBarcodeScanner';
 import { useBarcodeSearch } from '../hooks/useBarcodeSearch';
 import { useBarcodeFromImage } from '../hooks/useBarcodeFromImage';
 import { usePriceTagOCR } from '../hooks/usePriceTagOCR';
@@ -121,11 +121,12 @@ const ScannerScreen: React.FC<{
     note: ''
   });
 
-  // Start scanner on mount
+  // Start scanner on mount and rigorously cleanup camera tracks on unmount
   useEffect(() => {
     startScan();
     return () => {
       stopScan();
+      stopAllCameraMediaTracks();
     };
   }, [startScan, stopScan]);
 
@@ -433,6 +434,8 @@ const ScannerScreen: React.FC<{
             setScanMode('barcode');
             handleResumeScan();
           } else {
+            stopScan();
+            stopAllCameraMediaTracks();
             onBack();
           }
         }} 

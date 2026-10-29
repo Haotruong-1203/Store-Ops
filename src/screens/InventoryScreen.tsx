@@ -19,7 +19,9 @@ import {
   Barcode as BarcodeIcon,
   Tag,
   Layers,
-  HelpCircle
+  HelpCircle,
+  AlertTriangle,
+  Home
 } from 'lucide-react';
 import { Header, EmptyState } from '../components/SharedUI';
 import { OrderImageModal } from '../components/OrderImageModal';
@@ -74,11 +76,20 @@ export const InventoryScreen: React.FC<InventoryScreenProps> = ({
   initialOrderMode = 'consumable'
 }) => {
   // Chế độ đặt hàng: 'consumable' (Vật tư tiêu hao) hoặc 'general' (Hàng khác - Item Bán Hàng)
-  const [orderMode, setOrderMode] = useState<'consumable' | 'general'>(initialOrderMode || 'consumable');
+  const [orderMode, setOrderMode] = useState<'consumable' | 'general'>(
+    initialOrderMode === 'general' ? 'consumable' : (initialOrderMode || 'consumable')
+  );
+  // Modal báo lỗi tính năng Đặt hàng khác (Item bán) đang tạm dừng
+  const [showGeneralOrderErrorModal, setShowGeneralOrderErrorModal] = useState<boolean>(
+    initialOrderMode === 'general'
+  );
   
   // Đồng bộ khi prop initialOrderMode thay đổi từ bên ngoài (HomeScreen)
   useEffect(() => {
-    if (initialOrderMode) {
+    if (initialOrderMode === 'general') {
+      setShowGeneralOrderErrorModal(true);
+      setOrderMode('consumable');
+    } else if (initialOrderMode) {
       setOrderMode(initialOrderMode);
     }
   }, [initialOrderMode]);
@@ -493,6 +504,10 @@ export const InventoryScreen: React.FC<InventoryScreenProps> = ({
 
   // Mở modal sửa đợt đặt hàng đã lưu
   const handleOpenEdit = (order: ConsumableOrder) => {
+    if (order.orderType === 'general') {
+      setShowGeneralOrderErrorModal(true);
+      return;
+    }
     const qtys: Record<string, string> = {};
     order.records.forEach(r => {
       qtys[r.id] = r.quantity.toString();
@@ -576,8 +591,8 @@ export const InventoryScreen: React.FC<InventoryScreenProps> = ({
           <button 
             type="button"
             onClick={() => {
-              setOrderMode('general');
-              setSearchTerm('');
+              // Không làm gì cả và hiện pop up báo lỗi
+              setShowGeneralOrderErrorModal(true);
             }}
             className={`py-2 px-3 rounded-xl font-bold text-xs flex items-center justify-center gap-1.5 transition-all cursor-pointer ${
               orderMode === 'general' 
@@ -624,23 +639,20 @@ export const InventoryScreen: React.FC<InventoryScreenProps> = ({
              <div className="flex items-center justify-between gap-2 mb-3">
                <div>
                  <h3 className="font-bold text-slate-800 text-sm">
-                   {orderMode === 'consumable' ? 'Danh mục Consumable' : 'Danh mục Item Bán Hàng'}
+                   {orderMode === 'consumable' ? 'Consumable' : 'Item Bán Hàng'} ({filteredCatalog.length})
                  </h3>
-                 <p className="text-[0.72rem] text-slate-500">
-                   Hiển thị {filteredCatalog.length} / {activeCatalog.length} mặt hàng
-                 </p>
                </div>
                <button 
                  type="button"
                  onClick={() => handleOpenAddModal(searchTerm)}
-                 className={`px-3.5 py-2 text-white font-bold rounded-xl text-xs flex items-center gap-1.5 shadow-sm active:scale-95 transition-all cursor-pointer ${
+                 className={`px-3 py-1.5 text-white font-bold rounded-xl text-xs flex items-center gap-1 shadow-sm active:scale-95 transition-all cursor-pointer ${
                    orderMode === 'consumable' 
                      ? 'bg-blue-600 hover:bg-blue-700 shadow-blue-500/25' 
                      : 'bg-emerald-600 hover:bg-emerald-700 shadow-emerald-500/25'
                  }`}
                >
                  <Plus size={15} />
-                 <span>Tạo mới sản phẩm</span>
+                 <span>Mới</span>
                </button>
              </div>
 
@@ -1343,6 +1355,64 @@ export const InventoryScreen: React.FC<InventoryScreenProps> = ({
                   className="w-full py-2.5 text-rose-600 hover:bg-rose-50 rounded-xl text-xs font-bold transition-all flex items-center justify-center gap-1.5"
                 >
                   <Trash2 size={14} /> Xóa mặt hàng này khỏi CSDL
+                </button>
+              </div>
+            </motion.div>
+          </div>
+        )}
+      </AnimatePresence>
+
+      {/* MODAL BÁO LỖI: TÍNH NĂNG ĐẶT HÀNG KHÁC (ITEM BÁN) ĐANG TẠM DỪNG */}
+      <AnimatePresence>
+        {showGeneralOrderErrorModal && (
+          <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/60 backdrop-blur-xs">
+            <motion.div 
+              initial={{ opacity: 0, scale: 0.95, y: 10 }}
+              animate={{ opacity: 1, scale: 1, y: 0 }}
+              exit={{ opacity: 0, scale: 0.95, y: 10 }}
+              className="bg-white rounded-3xl p-6 max-w-xs w-full shadow-2xl border border-rose-100 flex flex-col items-center text-center space-y-4 relative"
+            >
+              <button
+                type="button"
+                onClick={() => {
+                  setShowGeneralOrderErrorModal(false);
+                  setOrderMode('consumable');
+                }}
+                className="absolute top-4 right-4 p-1.5 text-slate-400 hover:text-slate-600 hover:bg-slate-100 rounded-full transition-colors cursor-pointer"
+              >
+                <X size={18} />
+              </button>
+
+              <div className="w-14 h-14 rounded-2xl bg-rose-50 border border-rose-200 flex items-center justify-center text-rose-600 shadow-inner">
+                <AlertTriangle size={28} strokeWidth={2.2} />
+              </div>
+
+              <h3 className="text-base font-bold text-slate-900">
+                Tính năng bị lỗi
+              </h3>
+
+              <div className="w-full pt-1 space-y-2">
+                <button
+                  type="button"
+                  onClick={() => {
+                    setShowGeneralOrderErrorModal(false);
+                    onBack();
+                  }}
+                  className="w-full py-3 px-4 bg-gradient-to-r from-rose-600 to-red-600 hover:from-rose-700 hover:to-red-700 text-white font-bold rounded-2xl shadow-md shadow-rose-500/25 active:scale-98 transition-all flex items-center justify-center gap-2 cursor-pointer text-sm"
+                >
+                  <Home size={16} />
+                  <span>Màn hình chính</span>
+                </button>
+
+                <button
+                  type="button"
+                  onClick={() => {
+                    setShowGeneralOrderErrorModal(false);
+                    setOrderMode('consumable');
+                  }}
+                  className="w-full py-2.5 px-4 bg-slate-100 hover:bg-slate-200 text-slate-700 font-bold rounded-xl active:scale-98 transition-all text-xs cursor-pointer"
+                >
+                  Consumable
                 </button>
               </div>
             </motion.div>

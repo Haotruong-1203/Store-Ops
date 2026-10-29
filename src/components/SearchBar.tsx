@@ -1,5 +1,5 @@
 import React, { useState } from 'react';
-import { Search, X, Loader2 } from 'lucide-react';
+import { Search, X, Loader2, Barcode, Plus } from 'lucide-react';
 
 interface SearchBarProps {
   value: string;
@@ -25,8 +25,8 @@ export const SearchBar: React.FC<SearchBarProps> = ({
   const [keyboardMode, setKeyboardMode] = useState<'numeric' | 'text'>('numeric');
 
   const defaultPlaceholder = keyboardMode === 'numeric'
-    ? 'Nhập mã vạch hoặc mã nội bộ (bàn phím số)...'
-    : 'Nhập tên sản phẩm để tìm kiếm...';
+    ? 'Nhập mã vạch hoặc mã...'
+    : 'Tìm kiếm sản phẩm...';
 
   return (
     <div className="space-y-2 mb-3">
@@ -45,7 +45,7 @@ export const SearchBar: React.FC<SearchBarProps> = ({
           pattern={keyboardMode === 'numeric' ? '[0-9]*' : undefined}
           autoComplete="off"
           placeholder={placeholder || defaultPlaceholder}
-          className="w-full py-3.5 pl-12 pr-28 bg-white border border-slate-200/90 rounded-2xl shadow-sm text-[0.95rem] focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500 focus:outline-none transition-all"
+          className="w-full py-3 pl-12 pr-28 bg-white border border-slate-200/90 rounded-2xl shadow-sm text-[0.95rem] focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500 focus:outline-none transition-all"
           value={value}
           onChange={e => onChange(e.target.value)}
         />
@@ -65,7 +65,7 @@ export const SearchBar: React.FC<SearchBarProps> = ({
           <button
             type="button"
             onClick={() => setKeyboardMode(prev => prev === 'numeric' ? 'text' : 'numeric')}
-            className={`text-[0.72rem] font-bold px-2 py-1 rounded-xl border transition-all flex items-center gap-1 ${
+            className={`text-[0.72rem] font-bold px-2 py-1 rounded-xl border transition-all flex items-center gap-1 cursor-pointer ${
               keyboardMode === 'numeric'
                 ? 'bg-blue-50 border-blue-200 text-blue-700'
                 : 'bg-slate-100 border-slate-200 text-slate-600'
@@ -77,31 +77,28 @@ export const SearchBar: React.FC<SearchBarProps> = ({
         </div>
       </div>
 
-      <div className="flex justify-between items-center px-1 text-xs">
-        <span className="font-semibold text-slate-500">
-          {typeof totalCount === 'number' ? `Đang hiển thị ${totalCount} sản phẩm` : ''}
-        </span>
-        <div className="flex items-center gap-1.5">
-          {onOpenScanner && (
-            <button
-              type="button"
-              onClick={onOpenScanner}
-              className="font-bold text-emerald-700 hover:text-emerald-800 bg-emerald-50 hover:bg-emerald-100 border border-emerald-200/80 px-2.5 py-1.5 rounded-xl transition-all flex items-center gap-1 active:scale-95 shadow-sm"
-              title="Mở camera quét mã vạch sản phẩm"
-            >
-              <span className="text-sm">📷</span> Quét mã vạch
-            </button>
-          )}
-          {onOpenCreate && (
-            <button
-              type="button"
-              onClick={onOpenCreate}
-              className="font-bold text-blue-600 hover:text-blue-700 bg-blue-50 hover:bg-blue-100/80 px-2.5 py-1.5 rounded-xl transition-all flex items-center gap-1 active:scale-95"
-            >
-              + Thêm mới
-            </button>
-          )}
-        </div>
+      <div className="flex justify-end items-center px-1 text-xs gap-1.5">
+        {onOpenScanner && (
+          <button
+            type="button"
+            onClick={onOpenScanner}
+            className="font-bold text-emerald-700 hover:text-emerald-800 bg-emerald-50 hover:bg-emerald-100 border border-emerald-200/80 px-2.5 py-1.5 rounded-xl transition-all flex items-center gap-1.5 active:scale-95 shadow-sm cursor-pointer"
+            title="Quét mã vạch"
+          >
+            <Barcode size={16} />
+            <span>Quét</span>
+          </button>
+        )}
+        {onOpenCreate && (
+          <button
+            type="button"
+            onClick={onOpenCreate}
+            className="font-bold text-blue-600 hover:text-blue-700 bg-blue-50 hover:bg-blue-100/80 border border-blue-200/60 px-2.5 py-1.5 rounded-xl transition-all flex items-center gap-1 active:scale-95 cursor-pointer"
+          >
+            <Plus size={15} />
+            <span>Mới</span>
+          </button>
+        )}
       </div>
     </div>
   );

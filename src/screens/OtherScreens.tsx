@@ -1006,9 +1006,9 @@ export const ExpiryScreen: React.FC<{
       <div className="flex justify-end mb-4">
         <button 
           onClick={handleOpenAddRecordModal}
-          className="bg-blue-600 hover:bg-blue-700 text-white px-4 py-2.5 rounded-xl font-bold flex items-center gap-2 shadow-md transition-all active:scale-95"
+          className="bg-blue-600 hover:bg-blue-700 text-white px-3.5 py-2 rounded-xl font-bold flex items-center gap-1.5 shadow-sm transition-all active:scale-95 text-xs cursor-pointer"
         >
-          <Plus size={18} /> Thêm hạn sử dụng mới
+          <Plus size={16} /> Mới
         </button>
       </div>
 
@@ -1735,15 +1735,15 @@ export const DataScreen: React.FC<{
       {activeTab === 'sell' && (
         <div className="animate-in fade-in zoom-in-95 duration-200">
           <div className="grid grid-cols-2 gap-4 mb-6">
-            <button onClick={handleExportSell} className="py-4 bg-white border border-slate-200 text-slate-700 font-bold rounded-[1.2rem] shadow-sm flex flex-col items-center justify-center gap-2 active:scale-95 transition-all">
-              <Download className="text-indigo-500" size={24} /> Xuất CSV
+            <button onClick={handleExportSell} className="py-4 bg-white border border-slate-200 text-slate-700 font-bold rounded-[1.2rem] shadow-sm flex flex-col items-center justify-center gap-2 active:scale-95 transition-all cursor-pointer">
+              <Upload className="text-indigo-500" size={24} /> Xuất CSV
             </button>
             <label className="py-4 bg-white border border-slate-200 text-slate-700 font-bold rounded-[1.2rem] shadow-sm flex flex-col items-center justify-center gap-2 active:scale-95 transition-all cursor-pointer">
-              <Upload className="text-indigo-500" size={24} /> Nhập CSV
+              <Download className="text-indigo-500" size={24} /> Nhập CSV
               <input type="file" accept=".csv" className="hidden" onChange={handleImportSell} />
             </label>
-            <button onClick={handleClearSell} className="col-span-2 py-4 bg-rose-50 border border-rose-200 text-rose-700 font-bold rounded-[1.2rem] shadow-sm flex items-center justify-center gap-2 active:scale-95 transition-all hover:bg-rose-100">
-              <Trash size={20} /> Xóa toàn bộ CSDL Item Bán
+            <button onClick={handleClearSell} className="col-span-2 py-3 bg-rose-50 border border-rose-200 text-rose-700 font-bold rounded-[1.2rem] shadow-sm flex items-center justify-center gap-2 active:scale-95 transition-all hover:bg-rose-100 cursor-pointer text-sm">
+              <Trash size={18} /> Xóa CSDL Item Bán
             </button>
           </div>
 
@@ -1767,15 +1767,15 @@ export const DataScreen: React.FC<{
       {activeTab === 'order' && (
         <div className="animate-in fade-in zoom-in-95 duration-200">
           <div className="grid grid-cols-2 gap-4 mb-6">
-            <button onClick={handleExportOrder} className="py-4 bg-white border border-slate-200 text-slate-700 font-bold rounded-[1.2rem] shadow-sm flex flex-col items-center justify-center gap-2 active:scale-95 transition-all">
-              <Download className="text-blue-500" size={24} /> Xuất CSV
+            <button onClick={handleExportOrder} className="py-4 bg-white border border-slate-200 text-slate-700 font-bold rounded-[1.2rem] shadow-sm flex flex-col items-center justify-center gap-2 active:scale-95 transition-all cursor-pointer">
+              <Upload className="text-blue-500" size={24} /> Xuất CSV
             </button>
             <label className="py-4 bg-white border border-slate-200 text-slate-700 font-bold rounded-[1.2rem] shadow-sm flex flex-col items-center justify-center gap-2 active:scale-95 transition-all cursor-pointer">
-              <Upload className="text-blue-500" size={24} /> Nhập CSV
+              <Download className="text-blue-500" size={24} /> Nhập CSV
               <input type="file" accept=".csv" className="hidden" onChange={handleImportOrder} />
             </label>
-            <button onClick={handleClearOrder} className="col-span-2 py-4 bg-rose-50 border border-rose-200 text-rose-700 font-bold rounded-[1.2rem] shadow-sm flex items-center justify-center gap-2 active:scale-95 transition-all hover:bg-rose-100">
-              <Trash size={20} /> Xóa toàn bộ CSDL Item Đặt Hàng
+            <button onClick={handleClearOrder} className="col-span-2 py-3 bg-rose-50 border border-rose-200 text-rose-700 font-bold rounded-[1.2rem] shadow-sm flex items-center justify-center gap-2 active:scale-95 transition-all hover:bg-rose-100 cursor-pointer text-sm">
+              <Trash size={18} /> Xóa CSDL Item Đặt Hàng
             </button>
           </div>
 
@@ -1815,9 +1815,9 @@ export const DataScreen: React.FC<{
           </div>
 
           <div className="grid grid-cols-2 gap-3">
-            {/* Nút nhập file CSV */}
+            {/* Nút nhập file CSV (mũi tên hướng xuống) */}
             <label className="py-4 px-3 bg-white border border-slate-200 hover:border-rose-300 text-slate-700 font-bold rounded-[1.2rem] shadow-sm flex flex-col items-center justify-center gap-2 active:scale-95 transition-all cursor-pointer text-center">
-              <Upload className="text-rose-600" size={24} />
+              <Download className="text-rose-600" size={24} />
               <div className="text-xs">
                 <span className="block text-slate-800 font-extrabold text-[0.82rem]">Nhập file CSV</span>
                 <span className="text-[0.68rem] text-slate-400 font-normal">Tự nhận diện Barcode & Tên hàng</span>
@@ -1831,12 +1831,12 @@ export const DataScreen: React.FC<{
               />
             </label>
 
-            {/* Nút xuất file CSV */}
+            {/* Nút xuất file CSV (mũi tên hướng lên) */}
             <button 
               onClick={handleExportDestructionCSV} 
-              className="py-4 px-3 bg-white border border-slate-200 hover:border-rose-300 text-slate-700 font-bold rounded-[1.2rem] shadow-sm flex flex-col items-center justify-center gap-2 active:scale-95 transition-all text-center"
+              className="py-4 px-3 bg-white border border-slate-200 hover:border-rose-300 text-slate-700 font-bold rounded-[1.2rem] shadow-sm flex flex-col items-center justify-center gap-2 active:scale-95 transition-all text-center cursor-pointer"
             >
-              <Download className="text-rose-600" size={24} />
+              <Upload className="text-rose-600" size={24} />
               <div className="text-xs">
                 <span className="block text-slate-800 font-extrabold text-[0.82rem]">Xuất file CSV</span>
                 <span className="text-[0.68rem] text-slate-400 font-normal">Tải về danh sách hiện tại (.csv)</span>
