@@ -1,0 +1,8 @@
+{
+  "name": "Quản Lý Hàng",
+  "description": "Ứng dụng theo dõi, kiểm soát và quản lý hàng hóa, hạn sử dụng",
+  "requestFramePermissions": ["camera"],
+  "majorCapabilities": [
+    "MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"
+  ]
+}

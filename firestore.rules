@@ -1,0 +1,9 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    // Default rule: Cho phép đọc ghi phục vụ ứng dụng quản lý hàng hóa đa tài khoản
+    match /{document=**} {
+      allow read, write: if true;
+    }
+  }
+}

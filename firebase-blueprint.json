@@ -1,0 +1,30 @@
+{
+  "entities": {
+    "Product": {
+      "title": "Product",
+      "description": "Thông tin sản phẩm và các bản ghi hạn sử dụng",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string", "description": "ID định danh sản phẩm" },
+        "userId": { "type": "string", "description": "Tài khoản sở hữu dữ liệu (conghao, thuylinh, tramanh, admin)" },
+        "barcode": { "type": "string", "maxLength": 128 },
+        "internalCode": { "type": "string", "maxLength": 32 },
+        "name": { "type": "string", "maxLength": 256 },
+        "mfgDate": { "type": "string", "maxLength": 32 },
+        "destructionDate": { "type": "string", "maxLength": 32 },
+        "destroyDaysBeforeExpiry": { "type": "number" },
+        "price": { "type": "number" },
+        "expiryRecords": { "type": "array" },
+        "updatedAt": { "type": "string" },
+        "createdBy": { "type": "string" }
+      },
+      "required": ["id", "userId", "barcode", "name"]
+    }
+  },
+  "firestore": {
+    "/products/{productId}": {
+      "schema": "Product",
+      "description": "Kho sản phẩm lưu trữ online theo từng tài khoản người dùng"
+    }
+  }
+}

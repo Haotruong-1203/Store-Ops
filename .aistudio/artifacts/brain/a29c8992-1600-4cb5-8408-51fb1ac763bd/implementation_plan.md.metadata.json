@@ -1,0 +1,6 @@
+{
+  "summary": "Kế hoạch chi tiết thay thế tab Check giá bằng tab Hủy hàng (hỗ trợ nhập số lượng hủy tạm thời đối chiếu biên bản giấy, thanh tìm kiếm trên đầu, bảng gồm STT, Mã nội bộ/Barcode, Tên hàng, Số lượng, Ghi chú) và bổ sung tab riêng 'Biên bản hủy hàng' trong mục Dữ liệu hỗ trợ import file Excel (.xlsx/.xls) và CSV.",
+  "updatedAt": "2026-10-20T09:41:55.918103473Z",
+  "requestFeedback": true,
+  "userFacing": true
+}
