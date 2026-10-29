@@ -1,13 +1,13 @@
 import { 
   collection, 
   doc, 
-  setDoc, 
   onSnapshot, 
   query,
   getDocs,
   writeBatch
 } from 'firebase/firestore';
 import { db } from './firebase';
+import { runBulk, coalesce, BulkOp } from './bulkWrite';
 
 export interface DestructionItem {
   id: string;
@@ -15,7 +15,7 @@ export interface DestructionItem {
   barcode: string;
   internalCode?: string;
   name: string;
-  quantity?: number; // Số lượng gốc trên file/chứng từ (nếu có)
+  quantity?: number;
   note?: string;
   createdAt?: string;
 }
@@ -24,7 +24,8 @@ const DESTRUCTION_COLLECTION = 'destruction_items';
 const LOCAL_STORAGE_KEY = 'app_destruction_temp_quantities';
 const LOCAL_STORAGE_NOTES_KEY = 'app_destruction_temp_notes';
 
-// Danh sách dữ liệu mẫu ban đầu để người dùng trải nghiệm ngay
+let replacing = false;
+
 export const INITIAL_SAMPLE_DESTRUCTION_ITEMS: DestructionItem[] = [
   { id: 'dest-1', stt: 1, barcode: '8934567890123', internalCode: '100234', name: 'Sữa tươi Tiệt trùng Vinamilk 100% Có đường 1L', quantity: 3, note: 'Hộp móp, rò rỉ nắp' },
   { id: 'dest-2', stt: 2, barcode: '8935001712345', internalCode: '100456', name: 'Sữa chua men sống Probi chai 65ml (lốc 5)', quantity: 2, note: 'Hết hạn sử dụng' },
@@ -40,108 +41,107 @@ export const INITIAL_SAMPLE_DESTRUCTION_ITEMS: DestructionItem[] = [
   { id: 'dest-12', stt: 12, barcode: '8935217400199', internalCode: '121305', name: 'Kẹo ngậm không đường Halls vị Bạc hà vỉ 10 viên', quantity: 6, note: 'Tem bạc rách' }
 ];
 
-// Lắng nghe dữ liệu realtime từ Firestore
 export const subscribeDestructionItems = (
   onData: (items: DestructionItem[]) => void,
   onError?: (error: Error) => void
 ) => {
   const q = query(collection(db, DESTRUCTION_COLLECTION));
-  return onSnapshot(
-    q,
-    async (snapshot) => {
-      if (snapshot.empty) {
-        // Tự động khởi tạo dữ liệu mẫu nếu chưa có dữ liệu trong Firestore
-        try {
-          const batch = writeBatch(db);
-          INITIAL_SAMPLE_DESTRUCTION_ITEMS.forEach(item => {
-            const docRef = doc(db, DESTRUCTION_COLLECTION, item.id);
-            batch.set(docRef, { ...item, createdAt: new Date().toISOString() });
-          });
-          await batch.commit();
-          return;
-        } catch (e) {
-          console.warn('Fallback to local sample items:', e);
-          onData(INITIAL_SAMPLE_DESTRUCTION_ITEMS);
-          return;
-        }
-      }
-
-      const list: DestructionItem[] = [];
-      snapshot.forEach((docSnap) => {
-        const d = docSnap.data();
-        list.push({
-          id: docSnap.id,
-          stt: d.stt ?? (list.length + 1),
-          barcode: d.barcode || '',
-          internalCode: d.internalCode || undefined,
-          name: d.name || '',
-          quantity: typeof d.quantity === 'number' ? d.quantity : undefined,
-          note: d.note || '',
-          createdAt: d.createdAt
+  const throttled = coalesce(async (snapshot: any) => {
+    if (snapshot.empty) {
+      if (replacing) return;
+      try {
+        const batch = writeBatch(db);
+        INITIAL_SAMPLE_DESTRUCTION_ITEMS.forEach(item => {
+          const docRef = doc(db, DESTRUCTION_COLLECTION, item.id);
+          batch.set(docRef, { ...item, createdAt: new Date().toISOString() });
         });
-      });
+        await batch.commit();
+        return;
+      } catch (e) {
+        console.warn('Fallback to local sample items:', e);
+        onData(INITIAL_SAMPLE_DESTRUCTION_ITEMS);
+        return;
+      }
+    }
 
-      // Sắp xếp theo STT chuẩn tăng dần theo thứ tự biên bản giấy
-      list.sort((a, b) => {
-        const numA = typeof a.stt === 'number' ? a.stt : parseInt(String(a.stt).replace(/\D/g, '')) || 0;
-        const numB = typeof b.stt === 'number' ? b.stt : parseInt(String(b.stt).replace(/\D/g, '')) || 0;
-        return numA - numB;
+    const list: DestructionItem[] = [];
+    snapshot.forEach((docSnap: any) => {
+      const d = docSnap.data();
+      list.push({
+        id: docSnap.id,
+        stt: d.stt ?? (list.length + 1),
+        barcode: d.barcode || '',
+        internalCode: d.internalCode || undefined,
+        name: d.name || '',
+        quantity: typeof d.quantity === 'number' ? d.quantity : undefined,
+        note: d.note || '',
+        createdAt: d.createdAt
       });
+    });
 
-      onData(list);
-    },
+    list.sort((a, b) => {
+      const numA = typeof a.stt === 'number' ? a.stt : parseInt(String(a.stt).replace(/\D/g, '')) || 0;
+      const numB = typeof b.stt === 'number' ? b.stt : parseInt(String(b.stt).replace(/\D/g, '')) || 0;
+      return numA - numB;
+    });
+
+    onData(list);
+  });
+
+  const unsubscribe = onSnapshot(
+    q,
+    (snapshot) => throttled.push(snapshot),
     (error) => {
       console.error('Destruction subscribe error:', error);
       if (onError) onError(error);
-      // Fallback
       onData(INITIAL_SAMPLE_DESTRUCTION_ITEMS);
     }
   );
+
+  return () => {
+    throttled.cancel();
+    unsubscribe();
+  };
 };
 
-// Lưu toàn bộ danh sách biên bản mới vào Firestore
-export const saveDestructionBatchOnline = async (items: Omit<DestructionItem, 'id'>[]) => {
-  // Xóa cũ trước
-  await clearDestructionCollection();
-
-  // Lưu theo từng chunk 400 docs (Firestore batch limit là 500)
-  const chunkSize = 400;
-  for (let i = 0; i < items.length; i += chunkSize) {
-    const chunk = items.slice(i, i + chunkSize);
-    const batch = writeBatch(db);
-    
-    chunk.forEach((item, index) => {
-      const docId = 'dest-' + Date.now() + '-' + (i + index) + '-' + Math.random().toString(36).substring(2, 6);
-      const docRef = doc(db, DESTRUCTION_COLLECTION, docId);
-      batch.set(docRef, {
-        ...item,
-        id: docId,
-        createdAt: new Date().toISOString()
-      });
-    });
-
-    await batch.commit();
-  }
-};
-
-// Xóa toàn bộ dữ liệu biên bản hủy
 export const clearDestructionCollection = async () => {
   const q = query(collection(db, DESTRUCTION_COLLECTION));
   const snapshot = await getDocs(q);
-  const docs = snapshot.docs;
-  
-  const chunkSize = 400;
-  for (let i = 0; i < docs.length; i += chunkSize) {
-    const chunk = docs.slice(i, i + chunkSize);
-    const batch = writeBatch(db);
-    chunk.forEach((docSnap) => {
-      batch.delete(docSnap.ref);
+  const ops: BulkOp[] = snapshot.docs.map((docSnap) => ({
+    type: 'delete',
+    ref: docSnap.ref
+  }));
+  await runBulk(ops);
+};
+
+export const saveDestructionBatchOnline = async (
+  items: Omit<DestructionItem, 'id'>[],
+  onProgress?: (done: number, total: number) => void
+) => {
+  replacing = true;
+  try {
+    await clearDestructionCollection();
+    const stamp = Date.now();
+    const createdAt = new Date().toISOString();
+    const ops: BulkOp[] = items.map((item, index) => {
+      const docId = 'dest-' + stamp + '-' + index + '-' + Math.random().toString(36).substring(2, 6);
+      const docRef = doc(db, DESTRUCTION_COLLECTION, docId);
+      const data: Record<string, any> = {
+        ...item,
+        id: docId,
+        createdAt
+      };
+      if (item.internalCode) data.internalCode = item.internalCode;
+      if (item.quantity !== undefined) data.quantity = item.quantity;
+      if (item.note) data.note = item.note;
+      return { type: 'set', ref: docRef, data };
     });
-    await batch.commit();
+    await runBulk(ops, onProgress);
+  } finally {
+    replacing = false;
   }
 };
 
-// Lưu & Lấy số lượng nhập tạm thời (Local storage để không mất khi đổi tab/tải lại trang)
 export const getStoredTempQuantities = (): Record<string, number> => {
   try {
     const saved = localStorage.getItem(LOCAL_STORAGE_KEY);
@@ -155,15 +155,7 @@ export const saveStoredTempQuantities = (quantities: Record<string, number>) => 
   try {
     localStorage.setItem(LOCAL_STORAGE_KEY, JSON.stringify(quantities));
   } catch (e) {
-    console.warn('Could not save temp quantities to localStorage');
-  }
-};
-
-export const clearStoredTempQuantities = () => {
-  try {
-    localStorage.removeItem(LOCAL_STORAGE_KEY);
-  } catch (e) {
-    // ignore
+    console.warn('Could not save quantities to localStorage', e);
   }
 };
 
@@ -180,6 +172,15 @@ export const saveStoredTempNotes = (notes: Record<string, string>) => {
   try {
     localStorage.setItem(LOCAL_STORAGE_NOTES_KEY, JSON.stringify(notes));
   } catch (e) {
-    console.warn('Could not save temp notes to localStorage');
+    console.warn('Could not save notes to localStorage', e);
+  }
+};
+
+export const clearStoredTempQuantities = () => {
+  try {
+    localStorage.removeItem(LOCAL_STORAGE_KEY);
+    localStorage.removeItem(LOCAL_STORAGE_NOTES_KEY);
+  } catch (e) {
+    console.warn('Could not clear stored quantities', e);
   }
 };

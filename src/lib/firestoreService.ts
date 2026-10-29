@@ -6,38 +6,38 @@ import {
   onSnapshot, 
   query, 
   where,
-  getDocs,
-  writeBatch
+  getDocs
 } from 'firebase/firestore';
 import { db } from './firebase';
+import { runBulk, coalesce, BulkOp } from './bulkWrite';
 
 export interface ExpiryRecord {
   id: string;
-  expDate: string; // Hạn sử dụng (YYYY-MM-DD)
-  destructionDate: string; // Ngày phải hủy (YYYY-MM-DD)
-  quantity?: number; // Số lượng
-  note?: string; // Ghi chú lưu ý
+  expDate: string;
+  destructionDate: string;
+  quantity?: number;
+  note?: string;
   createdAt: string;
 }
 
 export interface Product {
   id?: number | string;
-  userId?: string; // Tài khoản sở hữu (ví dụ 'conghao', 'thuylinh', 'tramanh')
+  userId?: string;
   barcode: string;
-  internalCode?: string; // tối đa 8 số
+  internalCode?: string;
   name: string;
   mfgDate?: string;
   destructionDate?: string;
-  destroyDaysBeforeExpiry?: number; // Số ngày phải hủy trước HSD
+  destroyDaysBeforeExpiry?: number;
   price: number;
   expiryRecords?: ExpiryRecord[];
   createdAt?: string;
   updatedAt?: string;
+  tracked?: boolean;
 }
 
 const COLLECTION_NAME = 'products';
 
-// Lắng nghe dữ liệu realtime từ Firestore (Dùng chung cho tất cả user)
 export const subscribeProducts = (
   userId: string,
   onData: (products: Product[]) => void,
@@ -45,69 +45,72 @@ export const subscribeProducts = (
 ) => {
   try {
     const productsRef = collection(db, COLLECTION_NAME);
-    const q = query(productsRef); // Mọi người dùng đều thấy chung data
+    const q = query(productsRef, where('destructionDate', '>', ''));
+
+    const throttled = coalesce((snapshot: any) => {
+      const list: Product[] = [];
+      snapshot.forEach((docSnap: any) => {
+        const data = docSnap.data();
+        list.push({
+          id: docSnap.id,
+          userId: data.userId || userId,
+          barcode: data.barcode || '',
+          internalCode: data.internalCode || undefined,
+          name: data.name || '',
+          mfgDate: data.mfgDate || '',
+          destructionDate: data.destructionDate || '',
+          destroyDaysBeforeExpiry: data.destroyDaysBeforeExpiry ?? 0,
+          price: Number(data.price) || 0,
+          expiryRecords: data.expiryRecords || [],
+          createdAt: data.createdAt,
+          updatedAt: data.updatedAt,
+          tracked: data.tracked ?? Boolean(data.destructionDate)
+        });
+      });
+
+      const normalized = list.map((p) => {
+        if (!p.expiryRecords || p.expiryRecords.length === 0) {
+          if (p.destructionDate) {
+            return {
+              ...p,
+              expiryRecords: [{
+                id: 'rec-' + (p.id || 'init') + '-1',
+                expDate: p.destructionDate,
+                destructionDate: p.destructionDate,
+                createdAt: new Date().toISOString()
+              }]
+            };
+          }
+        }
+        return p;
+      });
+
+      onData(normalized);
+    });
 
     const unsubscribe = onSnapshot(
       q,
-      (snapshot) => {
-        const list: Product[] = [];
-        snapshot.forEach((docSnap) => {
-          const data = docSnap.data();
-          list.push({
-            id: docSnap.id,
-            userId: data.userId || userId,
-            barcode: data.barcode || '',
-            internalCode: data.internalCode || undefined,
-            name: data.name || '',
-            mfgDate: data.mfgDate || '',
-            destructionDate: data.destructionDate || '',
-            destroyDaysBeforeExpiry: data.destroyDaysBeforeExpiry ?? 0,
-            price: Number(data.price) || 0,
-            expiryRecords: data.expiryRecords || [],
-            createdAt: data.createdAt,
-            updatedAt: data.updatedAt
-          });
-        });
-
-        // Chuẩn hóa và sort theo tên / ngày tạo
-        const normalized = list.map((p) => {
-          if (!p.expiryRecords || p.expiryRecords.length === 0) {
-            if (p.destructionDate) {
-              return {
-                ...p,
-                expiryRecords: [{
-                  id: 'rec-' + (p.id || 'init') + '-1',
-                  expDate: p.destructionDate,
-                  destructionDate: p.destructionDate,
-                  createdAt: new Date().toISOString()
-                }]
-              };
-            }
-          }
-          return p;
-        });
-
-        onData(normalized);
-      },
+      (snapshot) => throttled.push(snapshot),
       (error) => {
         console.error('Firestore subscription error:', error);
         if (onError) onError(error);
       }
     );
 
-    return unsubscribe;
+    return () => {
+      throttled.cancel();
+      unsubscribe();
+    };
   } catch (err) {
     console.error('Failed to setup Firestore subscription:', err);
     return () => {};
   }
 };
 
-// Thêm sản phẩm lên Firestore
-export const addProductOnline = async (product: Omit<Product, 'id'>, userId: string): Promise<string> => {
-  const docId = 'prod_' + Date.now() + '_' + Math.random().toString(36).substring(2, 7);
-  const docRef = doc(db, COLLECTION_NAME, docId);
+export const buildProductPayload = (product: Omit<Product, 'id'>, userId: string, docId: string): Record<string, any> => {
+  const destructionDate = product.destructionDate || (product.expiryRecords && product.expiryRecords.length > 0 ? product.expiryRecords[0].destructionDate : '');
+  const isTracked = Boolean(destructionDate);
 
-  // Đảm bảo không truyền undefined lên Firestore
   const payload: Record<string, any> = {
     id: docId,
     userId: userId,
@@ -115,35 +118,61 @@ export const addProductOnline = async (product: Omit<Product, 'id'>, userId: str
     name: product.name || '',
     price: Number(product.price) || 0,
     destroyDaysBeforeExpiry: product.destroyDaysBeforeExpiry ?? 0,
-    destructionDate: product.destructionDate || '',
-    expiryRecords: product.expiryRecords || (product.destructionDate ? [{
+    destructionDate: destructionDate,
+    tracked: isTracked,
+    expiryRecords: product.expiryRecords || (destructionDate ? [{
       id: 'rec-' + Date.now(),
-      expDate: product.destructionDate,
-      destructionDate: product.destructionDate,
+      expDate: destructionDate,
+      destructionDate: destructionDate,
       createdAt: new Date().toISOString()
     }] : []),
-    createdAt: new Date().toISOString(),
+    createdAt: product.createdAt || new Date().toISOString(),
     updatedAt: new Date().toISOString()
   };
 
   if (product.internalCode) payload.internalCode = product.internalCode;
   if (product.mfgDate) payload.mfgDate = product.mfgDate;
 
+  return payload;
+};
+
+export const addProductOnline = async (product: Omit<Product, 'id'>, userId: string): Promise<string> => {
+  const docId = 'prod_' + Date.now() + '_' + Math.random().toString(36).substring(2, 7);
+  const docRef = doc(db, COLLECTION_NAME, docId);
+  const payload = buildProductPayload(product, userId, docId);
   await setDoc(docRef, payload);
   return docId;
 };
 
-// Cập nhật sản phẩm
+export const addProductsBulk = async (
+  products: Omit<Product, 'id'>[],
+  userId: string,
+  onProgress?: (done: number, total: number) => void
+): Promise<number> => {
+  const now = Date.now();
+  const ops: BulkOp[] = products.map((product, index) => {
+    const docId = 'prod_' + now + '_' + index + '_' + Math.random().toString(36).substring(2, 7);
+    const docRef = doc(db, COLLECTION_NAME, docId);
+    const payload = buildProductPayload(product, userId, docId);
+    return { type: 'set', ref: docRef, data: payload };
+  });
+  await runBulk(ops, onProgress);
+  return products.length;
+};
+
 export const updateProductOnline = async (product: Product): Promise<void> => {
   if (!product.id) return;
   const docRef = doc(db, COLLECTION_NAME, String(product.id));
+  const destructionDate = product.destructionDate || (product.expiryRecords && product.expiryRecords.length > 0 ? product.expiryRecords[0].destructionDate : '');
+  const isTracked = Boolean(destructionDate);
 
   const payload: Record<string, any> = {
     barcode: product.barcode || '',
     name: product.name || '',
     price: Number(product.price) || 0,
     destroyDaysBeforeExpiry: product.destroyDaysBeforeExpiry ?? 0,
-    destructionDate: product.destructionDate || '',
+    destructionDate: destructionDate,
+    tracked: isTracked,
     expiryRecords: product.expiryRecords || [],
     updatedAt: new Date().toISOString()
   };
@@ -155,7 +184,6 @@ export const updateProductOnline = async (product: Product): Promise<void> => {
   await setDoc(docRef, payload, { merge: true });
 };
 
-// Xóa sản phẩm
 export const deleteProductOnline = async (id: string | number): Promise<void> => {
   const docRef = doc(db, COLLECTION_NAME, String(id));
   await deleteDoc(docRef);
@@ -164,14 +192,13 @@ export const deleteProductOnline = async (id: string | number): Promise<void> =>
 export const clearProductsCollection = async () => {
   const q = query(collection(db, COLLECTION_NAME));
   const snapshot = await getDocs(q);
-  const batch = writeBatch(db);
-  snapshot.docs.forEach((docSnap) => {
-    batch.delete(docSnap.ref);
-  });
-  await batch.commit();
+  const ops: BulkOp[] = snapshot.docs.map(docSnap => ({
+    type: 'delete',
+    ref: docSnap.ref
+  }));
+  await runBulk(ops);
 };
 
-// Di chuyển dữ liệu từ local (IndexedDB) sang Online Firestore nếu có
 export const syncFromLocalToOnline = async (localProducts: Product[], targetUserId: string) => {
   if (!localProducts || localProducts.length === 0) return 0;
   let count = 0;

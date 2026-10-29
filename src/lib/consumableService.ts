@@ -6,12 +6,11 @@ import {
   onSnapshot, 
   query,
   getDocs,
-  writeBatch,
-  where,
-  orderBy
+  where
 } from 'firebase/firestore';
 import { db } from './firebase';
 import { PRESET_USERS } from './auth';
+import { runBulk, coalesce, BulkOp } from './bulkWrite';
 
 export interface ConsumableItem {
   id?: string;
@@ -24,17 +23,17 @@ export interface ConsumableItem {
 }
 
 export interface ConsumableRecord {
-  id: string; // sku
+  id: string;
   name: string;
   quantity: number;
-  creatorName?: string; // Tên người tạo record
+  creatorName?: string;
 }
 
 export interface ConsumableOrder {
   id: string;
   userId: string;
-  creatorName?: string; // Tên người tạo đợt đặt hàng
-  orderType?: 'consumable' | 'general'; // Phân loại: Consumable hoặc Hàng khác (Item bán hàng)
+  creatorName?: string;
+  orderType?: 'consumable' | 'general';
   createdAt: string;
   updatedAt?: string;
   records: ConsumableRecord[];
@@ -42,8 +41,6 @@ export interface ConsumableOrder {
 
 const CONSUMABLES_COLLECTION = 'consumables';
 const ORDERS_COLLECTION = 'consumable_orders';
-
-// --- ORDERS ---
 
 export const subscribeConsumableOrders = (
   userId: string = 'all',
@@ -80,7 +77,6 @@ export const subscribeConsumableOrders = (
       });
     });
 
-    // Sắp xếp ngày tạo mới nhất lên đầu
     list.sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime());
     onData(list);
   });
@@ -106,37 +102,41 @@ export const deleteConsumableOrderOnline = async (orderId: string) => {
   await deleteDoc(docRef);
 };
 
-// --- CONSUMABLE ITEMS ---
-
-// Lắng nghe dữ liệu realtime
 export const subscribeConsumables = (
   onData: (items: ConsumableItem[]) => void,
   onError?: (error: Error) => void
 ) => {
   const q = query(collection(db, CONSUMABLES_COLLECTION));
-  return onSnapshot(
-    q,
-    (snapshot) => {
-      const list: ConsumableItem[] = [];
-      snapshot.forEach((docSnap) => {
-        const data = docSnap.data();
-        list.push({
-          id: docSnap.id,
-          sku: data.sku || docSnap.id,
-          barcode: data.barcode || '',
-          name: data.name || '',
-          supplier: data.supplier || '',
-          createdAt: data.createdAt,
-          updatedAt: data.updatedAt
-        });
+  const throttled = coalesce((snapshot: any) => {
+    const list: ConsumableItem[] = [];
+    snapshot.forEach((docSnap: any) => {
+      const data = docSnap.data();
+      list.push({
+        id: docSnap.id,
+        sku: data.sku || docSnap.id,
+        barcode: data.barcode || '',
+        name: data.name || '',
+        supplier: data.supplier || '',
+        createdAt: data.createdAt,
+        updatedAt: data.updatedAt
       });
-      list.sort((a, b) => (a.name || '').localeCompare(b.name || '', 'vi'));
-      onData(list);
-    },
+    });
+    list.sort((a, b) => (a.name || '').localeCompare(b.name || '', 'vi'));
+    onData(list);
+  });
+
+  const unsubscribe = onSnapshot(
+    q,
+    (snapshot) => throttled.push(snapshot),
     (error) => {
       if (onError) onError(error);
     }
   );
+
+  return () => {
+    throttled.cancel();
+    unsubscribe();
+  };
 };
 
 export const addConsumableOnline = async (item: Omit<ConsumableItem, 'id'>) => {
@@ -151,6 +151,28 @@ export const addConsumableOnline = async (item: Omit<ConsumableItem, 'id'>) => {
     createdAt: new Date().toISOString()
   });
   return docId;
+};
+
+export const addConsumablesBulk = async (
+  items: Omit<ConsumableItem, 'id'>[],
+  onProgress?: (done: number, total: number) => void
+): Promise<number> => {
+  const stamp = Date.now();
+  const ops: BulkOp[] = items.map((item, index) => {
+    const docId = 'csm-' + stamp + '-' + index + '-' + Math.random().toString(36).substring(2, 6);
+    const docRef = doc(db, CONSUMABLES_COLLECTION, docId);
+    const data: Record<string, any> = {
+      ...item,
+      id: docId,
+      sku: item.sku || docId,
+      barcode: item.barcode || item.sku || '',
+      createdAt: item.createdAt || new Date().toISOString()
+    };
+    if (item.supplier) data.supplier = item.supplier;
+    return { type: 'set', ref: docRef, data };
+  });
+  await runBulk(ops, onProgress);
+  return items.length;
 };
 
 export const updateConsumableOnline = async (item: ConsumableItem) => {
@@ -170,13 +192,12 @@ export const deleteConsumableOnline = async (itemId: string) => {
   await deleteDoc(docRef);
 };
 
-// Hàm tiện ích xóa toàn bộ collection
 export const clearConsumablesCollection = async () => {
   const q = query(collection(db, CONSUMABLES_COLLECTION));
   const snapshot = await getDocs(q);
-  const batch = writeBatch(db);
-  snapshot.docs.forEach((docSnap) => {
-    batch.delete(docSnap.ref);
-  });
-  await batch.commit();
+  const ops: BulkOp[] = snapshot.docs.map((docSnap) => ({
+    type: 'delete',
+    ref: docSnap.ref
+  }));
+  await runBulk(ops);
 };

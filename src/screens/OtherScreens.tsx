@@ -31,8 +31,10 @@ import {
   HelpCircle
 } from 'lucide-react';
 import { Header, Card, EmptyState, InputGroup } from '../components/SharedUI';
-import { Product, ExpiryRecord, clearProductsCollection, addProductOnline } from '../lib/firestoreService';
-import { subscribeConsumables, addConsumableOnline, clearConsumablesCollection, ConsumableItem } from '../lib/consumableService';
+import { Product, ExpiryRecord, clearProductsCollection, addProductsBulk } from '../lib/firestoreService';
+import { subscribeConsumables, addConsumablesBulk, clearConsumablesCollection, ConsumableItem } from '../lib/consumableService';
+import { getCountFromServer, getAggregateFromServer, sum, collection } from 'firebase/firestore';
+import { db } from '../lib/firebase';
 import { 
   subscribeDestructionItems, 
   saveDestructionBatchOnline, 
@@ -1336,6 +1338,26 @@ export const DataScreen: React.FC<{
   const [consumables, setConsumables] = useState<ConsumableItem[]>([]);
   const [destructionItems, setDestructionItems] = useState<DestructionItem[]>([]);
   const [isImportingDestruction, setIsImportingDestruction] = useState(false);
+  const [importProgress, setImportProgress] = useState<string | null>(null);
+  const [totalProductsCount, setTotalProductsCount] = useState<number | null>(null);
+  const [totalProductsPrice, setTotalProductsPrice] = useState<number | null>(null);
+
+  useEffect(() => {
+    let active = true;
+    const fetchStats = async () => {
+      try {
+        const coll = collection(db, 'products');
+        const countSnap = await getCountFromServer(coll);
+        if (active) setTotalProductsCount(countSnap.data().count);
+        const aggSnap = await getAggregateFromServer(coll, { totalPrice: sum('price') });
+        if (active) setTotalProductsPrice(aggSnap.data().totalPrice);
+      } catch (e) {
+        console.warn('Stats fetch note:', e);
+      }
+    };
+    fetchStats();
+    return () => { active = false; };
+  }, []);
 
   useEffect(() => {
     const unsubConsumables = subscribeConsumables((items) => {
@@ -1352,7 +1374,6 @@ export const DataScreen: React.FC<{
 
   const totalValue = products.reduce((sum, p) => sum + (p.price || 0), 0);
   
-  // Calculate stats from all records
   let totalRecords = 0;
   let nearExpiryCount = 0;
   let expiredCount = 0;
@@ -1401,60 +1422,84 @@ export const DataScreen: React.FC<{
   const handleImportSell = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (!file) return;
-    const reader = new FileReader();
-    reader.onload = async ev => {
-      const text = ev.target?.result as string;
-      if (!text) return;
-      const lines = text.split('\n').slice(1);
-      let count = 0;
-      for (const line of lines) {
-        if (!line.trim()) continue;
-        const parts = line.split(',').map(v => v.replace(/"/g, '').trim());
-        if (parts.length >= 2) {
-          await addProductOnline({ 
-            name: parts[0], 
-            barcode: parts[1], 
+    try {
+      setImportProgress('Đang đọc file...');
+      const text = await file.text();
+      const rows = parseCSVRows(text).slice(1);
+      const items: Omit<Product, 'id'>[] = [];
+      for (const parts of rows) {
+        if (parts.length >= 2 && (parts[0] || parts[1])) {
+          items.push({
+            name: parts[0] || '',
+            barcode: parts[1] || '',
             internalCode: parts[2] || undefined,
             destroyDaysBeforeExpiry: parseInt(parts[3]) || 0,
             price: parseInt(parts[6]) || 0
-          }, 'shared'); // We made products shared
-          count++;
+          });
         }
       }
+      if (items.length === 0) {
+        alert('File không có dữ liệu hợp lệ!');
+        return;
+      }
+      setImportProgress(`Đang nạp 0/${items.length}...`);
+      const count = await addProductsBulk(items, 'shared', (done, total) => {
+        setImportProgress(`Đang nạp ${done}/${total}...`);
+      });
       alert(`Đã import thành công ${count} Item Bán!`);
+      try {
+        const coll = collection(db, 'products');
+        const countSnap = await getCountFromServer(coll);
+        setTotalProductsCount(countSnap.data().count);
+        const aggSnap = await getAggregateFromServer(coll, { totalPrice: sum('price') });
+        setTotalProductsPrice(aggSnap.data().totalPrice);
+      } catch (err) {
+        console.warn('Update stats error:', err);
+      }
+    } catch (err: any) {
+      console.error(err);
+      alert('Có lỗi khi import: ' + (err?.message || 'Thất bại'));
+    } finally {
+      setImportProgress(null);
       e.target.value = '';
-    };
-    reader.readAsText(file);
+    }
   };
 
   const handleImportOrder = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (!file) return;
-    const reader = new FileReader();
-    reader.onload = async ev => {
-      const text = ev.target?.result as string;
-      if (!text) return;
-      const lines = text.split('\n').slice(1);
-      let count = 0;
-      for (const line of lines) {
-        if (!line.trim()) continue;
-        const parts = line.split(',').map(v => v.replace(/"/g, '').trim());
-        if (parts.length >= 2) {
-          await addConsumableOnline({ 
-            sku: parts[0], 
-            name: parts[1], 
+    try {
+      setImportProgress('Đang đọc file...');
+      const text = await file.text();
+      const rows = parseCSVRows(text).slice(1);
+      const items: Omit<ConsumableItem, 'id'>[] = [];
+      for (const parts of rows) {
+        if (parts.length >= 2 && (parts[0] || parts[1])) {
+          items.push({
+            sku: parts[0] || '',
+            name: parts[1] || '',
             supplier: parts[2] || undefined
           });
-          count++;
         }
       }
+      if (items.length === 0) {
+        alert('File không có dữ liệu hợp lệ!');
+        return;
+      }
+      setImportProgress(`Đang nạp 0/${items.length}...`);
+      const count = await addConsumablesBulk(items, (done, total) => {
+        setImportProgress(`Đang nạp ${done}/${total}...`);
+      });
       alert(`Đã import thành công ${count} Item Đặt Hàng!`);
+    } catch (err: any) {
+      console.error(err);
+      alert('Có lỗi khi import: ' + (err?.message || 'Thất bại'));
+    } finally {
+      setImportProgress(null);
       e.target.value = '';
-    };
-    reader.readAsText(file);
+    }
   };
 
-  // --- QUẢN LÝ DỮ LIỆU BIÊN BẢN HỦY HÀNG (ƯU TIÊN CSV CHUẨN UTF-8) ---
   const [showCsvModal, setShowCsvModal] = useState(false);
   const [copiedCsvSample, setCopiedCsvSample] = useState(false);
 
@@ -1627,7 +1672,10 @@ export const DataScreen: React.FC<{
       if (parsedItems.length === 0) {
         alert('Không đọc được dòng dữ liệu hợp lệ nào từ file. Vui lòng kiểm tra lại cấu trúc file CSV theo mẫu hướng dẫn!');
       } else {
-        await saveDestructionBatchOnline(parsedItems);
+        setImportProgress(`Đang nạp 0/${parsedItems.length}...`);
+        await saveDestructionBatchOnline(parsedItems, (done, total) => {
+          setImportProgress(`Đang nạp ${done}/${total}...`);
+        });
         alert(`Đã nạp thành công ${parsedItems.length} mặt hàng vào Biên bản hủy hàng!`);
       }
     } catch (err: any) {
@@ -1635,6 +1683,7 @@ export const DataScreen: React.FC<{
       alert('Có lỗi khi đọc file: ' + (err.message || 'Lỗi định dạng'));
     } finally {
       setIsImportingDestruction(false);
+      setImportProgress(null);
       e.target.value = '';
     }
   };
@@ -1732,15 +1781,25 @@ export const DataScreen: React.FC<{
         </button>
       </div>
 
+      {importProgress && (
+        <div className="mb-4 p-3.5 bg-blue-50 border border-blue-200 rounded-2xl flex items-center justify-between gap-3 text-xs font-bold text-blue-700 animate-pulse">
+          <div className="flex items-center gap-2">
+            <span className="w-2.5 h-2.5 rounded-full bg-blue-600 animate-ping shrink-0" />
+            <span>{importProgress}</span>
+          </div>
+          <span className="text-[0.7rem] font-semibold text-blue-500">Vui lòng chờ</span>
+        </div>
+      )}
+
       {activeTab === 'sell' && (
         <div className="animate-in fade-in zoom-in-95 duration-200">
           <div className="grid grid-cols-2 gap-4 mb-6">
             <button onClick={handleExportSell} className="py-4 bg-white border border-slate-200 text-slate-700 font-bold rounded-[1.2rem] shadow-sm flex flex-col items-center justify-center gap-2 active:scale-95 transition-all cursor-pointer">
               <Upload className="text-indigo-500" size={24} /> Xuất CSV
             </button>
-            <label className="py-4 bg-white border border-slate-200 text-slate-700 font-bold rounded-[1.2rem] shadow-sm flex flex-col items-center justify-center gap-2 active:scale-95 transition-all cursor-pointer">
+            <label className={`py-4 bg-white border border-slate-200 text-slate-700 font-bold rounded-[1.2rem] shadow-sm flex flex-col items-center justify-center gap-2 transition-all ${importProgress ? 'opacity-50 cursor-not-allowed' : 'active:scale-95 cursor-pointer'}`}>
               <Download className="text-indigo-500" size={24} /> Nhập CSV
-              <input type="file" accept=".csv" className="hidden" onChange={handleImportSell} />
+              <input type="file" accept=".csv" className="hidden" onChange={handleImportSell} disabled={Boolean(importProgress)} />
             </label>
             <button onClick={handleClearSell} className="col-span-2 py-3 bg-rose-50 border border-rose-200 text-rose-700 font-bold rounded-[1.2rem] shadow-sm flex items-center justify-center gap-2 active:scale-95 transition-all hover:bg-rose-100 cursor-pointer text-sm">
               <Trash size={18} /> Xóa CSDL Item Bán
@@ -1750,7 +1809,7 @@ export const DataScreen: React.FC<{
           <div className="grid grid-cols-2 gap-4 pb-24">
             <div className="bg-white p-5 rounded-[1.5rem] shadow-sm border border-slate-100 text-center">
               <div className="text-[0.7rem] uppercase font-bold text-slate-400 tracking-wider mb-2">Tổng sản phẩm</div>
-              <div className="text-3xl font-black text-slate-800">{products.length}</div>
+              <div className="text-3xl font-black text-slate-800">{totalProductsCount !== null ? totalProductsCount : products.length}</div>
             </div>
             <div className="bg-white p-5 rounded-[1.5rem] shadow-sm border border-slate-100 text-center">
               <div className="text-[0.7rem] uppercase font-bold text-slate-400 tracking-wider mb-2">Tổng record hạn</div>
@@ -1758,7 +1817,7 @@ export const DataScreen: React.FC<{
             </div>
             <div className="bg-white p-5 rounded-[1.5rem] shadow-sm border border-slate-100 text-center col-span-2">
               <div className="text-[0.7rem] uppercase font-bold text-slate-400 tracking-wider mb-1">Tổng giá trị hàng</div>
-              <div className="text-2xl font-black text-emerald-600">{totalValue.toLocaleString('vi-VN')}đ</div>
+              <div className="text-2xl font-black text-emerald-600">{(totalProductsPrice !== null ? totalProductsPrice : totalValue).toLocaleString('vi-VN')}đ</div>
             </div>
           </div>
         </div>
@@ -1770,9 +1829,9 @@ export const DataScreen: React.FC<{
             <button onClick={handleExportOrder} className="py-4 bg-white border border-slate-200 text-slate-700 font-bold rounded-[1.2rem] shadow-sm flex flex-col items-center justify-center gap-2 active:scale-95 transition-all cursor-pointer">
               <Upload className="text-blue-500" size={24} /> Xuất CSV
             </button>
-            <label className="py-4 bg-white border border-slate-200 text-slate-700 font-bold rounded-[1.2rem] shadow-sm flex flex-col items-center justify-center gap-2 active:scale-95 transition-all cursor-pointer">
+            <label className={`py-4 bg-white border border-slate-200 text-slate-700 font-bold rounded-[1.2rem] shadow-sm flex flex-col items-center justify-center gap-2 transition-all ${importProgress ? 'opacity-50 cursor-not-allowed' : 'active:scale-95 cursor-pointer'}`}>
               <Download className="text-blue-500" size={24} /> Nhập CSV
-              <input type="file" accept=".csv" className="hidden" onChange={handleImportOrder} />
+              <input type="file" accept=".csv" className="hidden" onChange={handleImportOrder} disabled={Boolean(importProgress)} />
             </label>
             <button onClick={handleClearOrder} className="col-span-2 py-3 bg-rose-50 border border-rose-200 text-rose-700 font-bold rounded-[1.2rem] shadow-sm flex items-center justify-center gap-2 active:scale-95 transition-all hover:bg-rose-100 cursor-pointer text-sm">
               <Trash size={18} /> Xóa CSDL Item Đặt Hàng
@@ -1788,11 +1847,8 @@ export const DataScreen: React.FC<{
         </div>
       )}
 
-      {/* TAB BIÊN BẢN HỦY HÀNG (ĐẦU VÀO CSV CHUẨN UTF-8) */}
       {activeTab === 'destruction' && (
         <div className="animate-in fade-in zoom-in-95 duration-200 space-y-4 pb-24">
-          
-          {/* Banner hướng dẫn nhanh cấu trúc CSV */}
           <div className="bg-linear-to-r from-rose-50 to-orange-50 border border-rose-200/80 rounded-2xl p-3.5 flex items-start justify-between gap-3 shadow-xs">
             <div className="flex items-start gap-2.5">
               <div className="w-8 h-8 rounded-xl bg-rose-100 text-rose-600 flex items-center justify-center shrink-0 mt-0.5">
@@ -1815,8 +1871,7 @@ export const DataScreen: React.FC<{
           </div>
 
           <div className="grid grid-cols-2 gap-3">
-            {/* Nút nhập file CSV (mũi tên hướng xuống) */}
-            <label className="py-4 px-3 bg-white border border-slate-200 hover:border-rose-300 text-slate-700 font-bold rounded-[1.2rem] shadow-sm flex flex-col items-center justify-center gap-2 active:scale-95 transition-all cursor-pointer text-center">
+            <label className={`py-4 px-3 bg-white border border-slate-200 hover:border-rose-300 text-slate-700 font-bold rounded-[1.2rem] shadow-sm flex flex-col items-center justify-center gap-2 transition-all cursor-pointer text-center ${importProgress ? 'opacity-50 cursor-not-allowed' : 'active:scale-95'}`}>
               <Download className="text-rose-600" size={24} />
               <div className="text-xs">
                 <span className="block text-slate-800 font-extrabold text-[0.82rem]">Nhập file CSV</span>
@@ -1827,11 +1882,10 @@ export const DataScreen: React.FC<{
                 accept=".csv, .txt, .xlsx, .xls" 
                 className="hidden" 
                 onChange={handleImportDestructionFile}
-                disabled={isImportingDestruction}
+                disabled={Boolean(importProgress || isImportingDestruction)}
               />
             </label>
 
-            {/* Nút xuất file CSV (mũi tên hướng lên) */}
             <button 
               onClick={handleExportDestructionCSV} 
               className="py-4 px-3 bg-white border border-slate-200 hover:border-rose-300 text-slate-700 font-bold rounded-[1.2rem] shadow-sm flex flex-col items-center justify-center gap-2 active:scale-95 transition-all text-center cursor-pointer"
