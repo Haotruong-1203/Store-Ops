@@ -1,17 +1,4 @@
-import { 
-  collection, 
-  addDoc, 
-  onSnapshot, 
-  query, 
-  where,
-  orderBy, 
-  limit,
-  serverTimestamp,
-  Timestamp,
-  doc,
-  updateDoc
-} from 'firebase/firestore';
-import { db } from './firebase';
+import { supabase } from './supabase';
 
 export interface ChatMessage {
   id?: string;
@@ -21,7 +8,7 @@ export interface ChatMessage {
   imageUrl?: string;
   isDeleted?: boolean;
   isPinned?: boolean;
-  pinnedAt?: Timestamp | Date;
+  pinnedAt?: Date | string;
   pinnedBy?: string;
   productInfo?: {
     name: string;
@@ -36,125 +23,221 @@ export interface ChatMessage {
     isImage: boolean;
     isProduct: boolean;
   };
-  createdAt: Timestamp | Date;
+  createdAt: Date | string;
 }
 
-const COLLECTION_NAME = 'messages';
+const TABLE_NAME = 'messages';
 
-// Lắng nghe tin nhắn realtime
+const messageSubscribers = new Set<(messages: ChatMessage[]) => void>();
+const pinnedSubscribers = new Set<(messages: ChatMessage[]) => void>();
+
+const mapRowToChatMessage = (row: any): ChatMessage => {
+  let senderId = row.userName || 'user';
+  let productInfo = undefined;
+  let replyTo = undefined;
+  let isDeleted = row.isDeleted ?? false;
+  let pinnedBy = row.pinnedBy;
+
+  if (row.userRole) {
+    try {
+      if (typeof row.userRole === 'string' && row.userRole.startsWith('{')) {
+        const meta = JSON.parse(row.userRole);
+        if (meta.senderId) senderId = meta.senderId;
+        if (meta.productInfo) productInfo = meta.productInfo;
+        if (meta.replyTo) replyTo = meta.replyTo;
+        if (meta.isDeleted !== undefined) isDeleted = meta.isDeleted;
+        if (meta.pinnedBy) pinnedBy = meta.pinnedBy;
+      } else if (typeof row.userRole === 'string') {
+        senderId = row.userRole;
+      }
+    } catch {}
+  }
+
+  if (senderId === 'Công Hào' || row.userName === 'Công Hào') {
+    senderId = 'conghao';
+  }
+
+  return {
+    id: row.id,
+    senderId,
+    senderName: row.userName || 'Thành viên',
+    text: row.text || '',
+    imageUrl: row.imageUrl,
+    isDeleted,
+    isPinned: row.isPinned ?? false,
+    pinnedAt: row.pinnedAt ? new Date(row.pinnedAt) : undefined,
+    pinnedBy,
+    productInfo,
+    replyTo,
+    createdAt: row.createdAt ? new Date(row.createdAt) : new Date()
+  };
+};
+
+export const notifyMessageSubscribers = async () => {
+  if (messageSubscribers.size === 0) return;
+  try {
+    const { data, error } = await supabase
+      .from(TABLE_NAME)
+      .select('*')
+      .order('createdAt', { ascending: false })
+      .limit(100);
+    if (!error && data) {
+      const msgs = data.map(mapRowToChatMessage).reverse();
+      messageSubscribers.forEach(cb => {
+        try { cb(msgs); } catch {}
+      });
+    }
+  } catch {}
+};
+
+export const notifyPinnedSubscribers = async () => {
+  if (pinnedSubscribers.size === 0) return;
+  try {
+    const { data, error } = await supabase
+      .from(TABLE_NAME)
+      .select('*')
+      .eq('isPinned', true)
+      .order('createdAt', { ascending: false });
+    if (!error && data) {
+      const msgs = data.map(mapRowToChatMessage).filter(m => !m.isDeleted);
+      msgs.sort((a, b) => {
+        const tA = a.pinnedAt ? new Date(a.pinnedAt).getTime() : new Date(a.createdAt).getTime();
+        const tB = b.pinnedAt ? new Date(b.pinnedAt).getTime() : new Date(b.createdAt).getTime();
+        return tB - tA;
+      });
+      pinnedSubscribers.forEach(cb => {
+        try { cb(msgs); } catch {}
+      });
+    }
+  } catch {}
+};
+
 export const subscribeMessages = (
   onData: (messages: ChatMessage[]) => void,
   onError?: (error: Error) => void
 ) => {
-  const q = query(
-    collection(db, COLLECTION_NAME),
-    orderBy('createdAt', 'desc'),
-    limit(100)
-  );
+  let isCancelled = false;
+  messageSubscribers.add(onData);
 
-  return onSnapshot(
-    q,
-    (snapshot) => {
-      const messages: ChatMessage[] = [];
-      snapshot.forEach((doc) => {
-        const data = doc.data();
-        messages.push({
-          id: doc.id,
-          senderId: data.senderId,
-          senderName: data.senderName,
-          text: data.text,
-          imageUrl: data.imageUrl,
-          isDeleted: data.isDeleted,
-          isPinned: data.isPinned ?? false,
-          pinnedAt: data.pinnedAt?.toDate?.() || data.pinnedAt,
-          pinnedBy: data.pinnedBy,
-          productInfo: data.productInfo,
-          replyTo: data.replyTo,
-          createdAt: data.createdAt?.toDate?.() || new Date(),
-        } as ChatMessage);
-      });
-      // Đảo ngược để tin nhắn cũ nhất ở trên, mới nhất ở dưới
+  const loadMessages = async () => {
+    try {
+      const { data, error } = await supabase
+        .from(TABLE_NAME)
+        .select('*')
+        .order('createdAt', { ascending: false })
+        .limit(100);
+
+      if (error) throw error;
+      if (isCancelled) return;
+
+      const messages: ChatMessage[] = (data || []).map(mapRowToChatMessage);
       onData(messages.reverse());
-    },
-    (error) => {
-      if (onError) onError(error);
+    } catch (err: any) {
+      if (isCancelled) return;
+      if (onError) onError(err);
     }
-  );
+  };
+
+  loadMessages();
+
+  const channel = supabase
+    .channel('messages-realtime')
+    .on(
+      'postgres_changes',
+      { event: '*', schema: 'public', table: TABLE_NAME },
+      () => {
+        if (!isCancelled) loadMessages();
+      }
+    )
+    .subscribe();
+
+  const pollInterval = setInterval(() => {
+    if (!isCancelled) loadMessages();
+  }, 2500);
+
+  return () => {
+    isCancelled = true;
+    messageSubscribers.delete(onData);
+    clearInterval(pollInterval);
+    supabase.removeChannel(channel);
+  };
 };
 
-// Ghim hoặc bỏ ghim tin nhắn
 export const togglePinMessage = async (messageId: string, isPinned: boolean, pinnedBy?: string) => {
-  try {
-    const docRef = doc(db, COLLECTION_NAME, messageId);
-    await updateDoc(docRef, {
-      isPinned: isPinned,
-      pinnedAt: isPinned ? serverTimestamp() : null,
-      pinnedBy: isPinned ? (pinnedBy || null) : null
-    });
-  } catch (error) {
-    console.error("Lỗi khi ghim/bỏ ghim tin nhắn:", error);
-    throw error;
-  }
+  const payload = {
+    isPinned,
+    pinnedAt: isPinned ? new Date().toISOString() : null,
+    pinnedBy: isPinned ? (pinnedBy || null) : null
+  };
+  const { error } = await supabase
+    .from(TABLE_NAME)
+    .update(payload)
+    .eq('id', messageId);
+  if (error) throw error;
+  notifyMessageSubscribers();
+  notifyPinnedSubscribers();
 };
 
-// Lắng nghe các tin nhắn được ghim realtime
 export const subscribePinnedMessages = (
   onData: (messages: ChatMessage[]) => void,
   onError?: (error: Error) => void
 ) => {
-  const q = query(
-    collection(db, COLLECTION_NAME),
-    where('isPinned', '==', true)
-  );
+  let isCancelled = false;
+  pinnedSubscribers.add(onData);
 
-  return onSnapshot(
-    q,
-    (snapshot) => {
-      const messages: ChatMessage[] = [];
-      snapshot.forEach((doc) => {
-        const data = doc.data();
-        if (!data.isDeleted) {
-          messages.push({
-            id: doc.id,
-            senderId: data.senderId,
-            senderName: data.senderName,
-            text: data.text,
-            imageUrl: data.imageUrl,
-            isDeleted: data.isDeleted,
-            isPinned: true,
-            pinnedAt: data.pinnedAt?.toDate?.() || data.pinnedAt,
-            pinnedBy: data.pinnedBy,
-            productInfo: data.productInfo,
-            replyTo: data.replyTo,
-            createdAt: data.createdAt?.toDate?.() || new Date(),
-          } as ChatMessage);
-        }
-      });
+  const loadPinned = async () => {
+    try {
+      const { data, error } = await supabase
+        .from(TABLE_NAME)
+        .select('*')
+        .eq('isPinned', true)
+        .order('createdAt', { ascending: false });
 
-      // Sắp xếp tin nhắn được ghim mới nhất lên đầu
+      if (error) throw error;
+      if (isCancelled) return;
+
+      const messages: ChatMessage[] = (data || [])
+        .map(mapRowToChatMessage)
+        .filter(m => !m.isDeleted);
+
       messages.sort((a, b) => {
-        const getTime = (val: any) => {
-          if (!val) return 0;
-          if (typeof val.toMillis === 'function') return val.toMillis();
-          if (typeof val.toDate === 'function') return val.toDate().getTime();
-          if (val instanceof Date) return val.getTime();
-          return new Date(val).getTime() || 0;
-        };
-        const tA = a.pinnedAt ? getTime(a.pinnedAt) : getTime(a.createdAt);
-        const tB = b.pinnedAt ? getTime(b.pinnedAt) : getTime(b.createdAt);
+        const tA = a.pinnedAt ? new Date(a.pinnedAt).getTime() : new Date(a.createdAt).getTime();
+        const tB = b.pinnedAt ? new Date(b.pinnedAt).getTime() : new Date(b.createdAt).getTime();
         return tB - tA;
       });
 
       onData(messages);
-    },
-    (error) => {
-      console.error("Lỗi khi lắng nghe tin nhắn ghim:", error);
-      if (onError) onError(error);
+    } catch (err: any) {
+      if (isCancelled) return;
+      if (onError) onError(err);
     }
-  );
+  };
+
+  loadPinned();
+
+  const channel = supabase
+    .channel('pinned-realtime')
+    .on(
+      'postgres_changes',
+      { event: '*', schema: 'public', table: TABLE_NAME },
+      () => {
+        if (!isCancelled) loadPinned();
+      }
+    )
+    .subscribe();
+
+  const pollInterval = setInterval(() => {
+    if (!isCancelled) loadPinned();
+  }, 4000);
+
+  return () => {
+    isCancelled = true;
+    pinnedSubscribers.delete(onData);
+    clearInterval(pollInterval);
+    supabase.removeChannel(channel);
+  };
 };
 
-// Gửi tin nhắn mới
 export const sendMessage = async (
   senderId: string, 
   senderName: string, 
@@ -162,34 +245,53 @@ export const sendMessage = async (
   imageUrl?: string,
   productInfo?: { name: string; barcode: string; internalCode?: string; price?: number },
   replyTo?: { id: string; senderName: string; text: string; isImage: boolean; isProduct: boolean }
-) => {
-  if (!text.trim() && !imageUrl && !productInfo) return;
-  
-  try {
-    await addDoc(collection(db, COLLECTION_NAME), {
-      senderId,
-      senderName,
-      text: text.trim(),
-      imageUrl: imageUrl || null,
-      productInfo: productInfo || null,
-      replyTo: replyTo || null,
-      isDeleted: false,
-      createdAt: serverTimestamp()
-    });
-  } catch (error) {
-    console.error("Lỗi khi gửi tin nhắn:", error);
-    throw error;
+): Promise<ChatMessage> => {
+  if (!text.trim() && !imageUrl && !productInfo) {
+    throw new Error('Tin nhắn rỗng');
   }
+
+  const docId = 'msg_' + Date.now() + '_' + Math.random().toString(36).substring(2, 7);
+  const now = new Date();
+  const meta = {
+    senderId,
+    productInfo: productInfo || null,
+    replyTo: replyTo || null
+  };
+
+  const payload = {
+    id: docId,
+    text: text.trim(),
+    userName: senderName,
+    userRole: JSON.stringify(meta),
+    imageUrl: imageUrl || null,
+    isPinned: false,
+    createdAt: now.toISOString()
+  };
+
+  const { error } = await supabase.from(TABLE_NAME).insert([payload]);
+  if (error) throw error;
+
+  const createdMsg: ChatMessage = {
+    id: docId,
+    senderId,
+    senderName,
+    text: text.trim(),
+    imageUrl,
+    productInfo,
+    replyTo,
+    isPinned: false,
+    createdAt: now
+  };
+
+  notifyMessageSubscribers();
+  return createdMsg;
 };
 
 export const revokeMessage = async (messageId: string) => {
-  try {
-    const docRef = doc(db, COLLECTION_NAME, messageId);
-    await updateDoc(docRef, {
-      isDeleted: true
-    });
-  } catch (error) {
-    console.error("Lỗi khi thu hồi tin nhắn:", error);
-    throw error;
-  }
+  const { error } = await supabase
+    .from(TABLE_NAME)
+    .delete()
+    .eq('id', messageId);
+  if (error) throw error;
+  notifyMessageSubscribers();
 };

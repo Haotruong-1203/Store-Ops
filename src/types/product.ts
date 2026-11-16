@@ -1,12 +1,11 @@
 import { RefObject } from 'react';
-import { Timestamp } from 'firebase/firestore';
 
 export interface ExpiryRecord {
   id: string;
-  expDate: string; // Hạn sử dụng (YYYY-MM-DD)
-  destructionDate: string; // Ngày phải hủy (YYYY-MM-DD)
-  quantity?: number; // Số lượng
-  note?: string; // Ghi chú lưu ý
+  expDate: string;
+  destructionDate: string;
+  quantity?: number;
+  note?: string;
   createdAt: string;
 }
 
@@ -17,7 +16,7 @@ export interface Product {
   sku?: string;
   internalCode?: string;
   price: number;
-  expireDate?: Timestamp | string | null;
+  expireDate?: string | null;
   destructionDate?: string;
   destroyDaysBeforeExpiry?: number;
   imageUrl?: string;

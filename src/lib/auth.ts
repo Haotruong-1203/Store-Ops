@@ -1,5 +1,4 @@
-import { collection, doc, setDoc, getDocs } from 'firebase/firestore';
-import { db } from './firebase';
+import { supabase } from './supabase';
 
 export interface UserAccount {
   id: string;
@@ -18,12 +17,11 @@ export interface StoredUserProfile {
   createdAt?: string;
 }
 
-// Tài khoản mặc định: Chỉ giữ lại Công Hào (hỗ trợ pass thường & pass admin)
 export const PRESET_USERS: Record<string, { name: string; password: string; adminPassword?: string; avatarBg: string }> = {
   conghao: {
     name: 'Công Hào',
     password: 'Haotruong1203%',
-    adminPassword: 'admin', // Mật khẩu kích hoạt quyền Admin khi đăng nhập bằng Công Hào
+    adminPassword: 'admin',
     avatarBg: 'bg-blue-600'
   }
 };
@@ -62,12 +60,20 @@ export const clearUserSession = () => {
   localStorage.removeItem(SESSION_KEY);
 };
 
-// Đọc danh sách tài khoản tự tạo từ LocalStorage
+// Đọc danh sách tài khoản tự tạo từ LocalStorage (loại bỏ hoàn toàn Thử Nghiệm)
 export const getCustomUsers = (): StoredUserProfile[] => {
   try {
     const raw = localStorage.getItem(CUSTOM_USERS_KEY);
     if (!raw) return [];
-    return JSON.parse(raw);
+    const list: StoredUserProfile[] = JSON.parse(raw);
+    const filtered = list.filter(u => 
+      u.name.trim().toLowerCase() !== 'thử nghiệm' && 
+      !u.username.toLowerCase().includes('thunghiem')
+    );
+    if (filtered.length !== list.length) {
+      localStorage.setItem(CUSTOM_USERS_KEY, JSON.stringify(filtered));
+    }
+    return filtered;
   } catch {
     return [];
   }
@@ -104,38 +110,37 @@ export const saveCustomUser = async (name: string, password: string): Promise<St
   users.push(newUser);
   localStorage.setItem(CUSTOM_USERS_KEY, JSON.stringify(users));
 
-  // Đồng bộ lên Firestore để các thiết bị khác cũng thấy được tài khoản này
   try {
-    await setDoc(doc(db, 'app_users', newUser.username), {
+    await supabase.from('app_users').upsert({
       username: newUser.username,
       name: newUser.name,
       password: newUser.password,
       avatarBg: newUser.avatarBg,
       role: 'user',
       createdAt: newUser.createdAt
-    }, { merge: true });
+    }, { onConflict: 'username' });
   } catch (err) {
-    console.warn('Lỗi khi đồng bộ user lên Firestore:', err);
+    console.warn('Lỗi khi đồng bộ user lên Supabase:', err);
   }
 
   return newUser;
 };
 
-// Lấy danh sách tài khoản từ Firestore (chạy nền khi mở màn hình login)
 export const fetchRemoteCustomUsers = async (): Promise<StoredUserProfile[]> => {
   try {
-    const snap = await getDocs(collection(db, 'app_users'));
+    const { data, error } = await supabase.from('app_users').select('*');
+    if (error) throw error;
     const remoteUsers: StoredUserProfile[] = [];
-    snap.forEach(d => {
-      const data = d.data();
-      if (data.username && data.name && data.password) {
+    (data || []).forEach((row: any) => {
+      const isTestUser = row.name?.trim().toLowerCase() === 'thử nghiệm' || row.username?.toLowerCase().includes('thunghiem');
+      if (row.username && row.name && row.password && !isTestUser) {
         remoteUsers.push({
-          username: data.username,
-          name: data.name,
-          password: data.password,
-          avatarBg: data.avatarBg || 'bg-indigo-600',
+          username: row.username,
+          name: row.name,
+          password: row.password,
+          avatarBg: row.avatarBg || 'bg-indigo-600',
           role: 'user',
-          createdAt: data.createdAt
+          createdAt: row.createdAt
         });
       }
     });
@@ -150,7 +155,7 @@ export const fetchRemoteCustomUsers = async (): Promise<StoredUserProfile[]> => 
       return merged;
     }
   } catch (err) {
-    console.warn('Lấy danh sách user từ Firestore thất bại:', err);
+    console.warn('Lấy danh sách user từ Supabase thất bại:', err);
   }
   return getCustomUsers();
 };

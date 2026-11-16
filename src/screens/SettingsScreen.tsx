@@ -48,30 +48,30 @@ export const SettingsScreen: React.FC<SettingsScreenProps> = ({ onBack, currentU
     }
   };
 
-  const inputClass = "w-full bg-slate-50 border-2 border-slate-200 text-slate-800 rounded-xl px-4 py-3.5 focus:outline-none focus:border-blue-500 focus:bg-white transition-colors text-[0.95rem]";
+  const inputClass = "w-full bg-slate-100/80 text-slate-800 rounded-2xl px-4 py-3.5 focus:outline-none focus:ring-2 focus:ring-blue-500/20 transition-all text-[0.95rem] border-0 font-medium";
 
   return (
     <motion.div 
       initial={{ opacity: 0, x: 20 }} 
       animate={{ opacity: 1, x: 0 }} 
       exit={{ opacity: 0, x: -20 }}
-      className="flex flex-col h-full bg-slate-50 absolute inset-0"
+      className="flex flex-col h-full bg-transparent absolute inset-0"
     >
-      <div className="pt-safe px-4 shrink-0 bg-white/80 backdrop-blur-md border-b border-slate-200 z-10 shadow-sm">
+      <div className="pt-safe px-4 shrink-0 z-10">
         <Header title="Cài đặt hệ thống" onBack={onBack} />
       </div>
 
-      <div className="flex-1 overflow-y-auto px-4 py-6 space-y-6">
+      <div className="flex-1 overflow-y-auto px-4 py-4 space-y-6 pb-28">
         
         {/* User Info Section */}
-        <div className="bg-white p-5 rounded-3xl border border-slate-100 shadow-sm">
-          <div className="flex items-center gap-3 mb-4">
-             <div className="w-12 h-12 bg-slate-100 rounded-full flex items-center justify-center">
-               <Key className="text-slate-500" size={24} />
+        <div className="bg-white/90 backdrop-blur-md p-6 rounded-3xl shadow-apple border-0">
+          <div className="flex items-center gap-3.5 mb-5">
+             <div className="w-12 h-12 bg-slate-100/80 rounded-2xl flex items-center justify-center text-slate-600 shadow-apple-soft">
+               <Key size={22} />
              </div>
              <div>
-               <h3 className="font-bold text-slate-800">Đổi mật khẩu</h3>
-               <p className="text-sm text-slate-500">Mã hóa bảo mật SHA-256</p>
+               <h3 className="font-bold text-slate-800 text-base">Đổi mật khẩu</h3>
+               <p className="text-xs text-slate-500 font-medium">Mã hóa bảo mật SHA-256</p>
              </div>
           </div>
 
@@ -107,22 +107,22 @@ export const SettingsScreen: React.FC<SettingsScreenProps> = ({ onBack, currentU
             </InputGroup>
 
             {message && (
-              <div className={`p-3 rounded-xl text-sm font-medium flex items-center gap-2 ${message.type === 'error' ? 'bg-rose-50 text-rose-600' : 'bg-emerald-50 text-emerald-600'}`}>
+              <div className={`p-3.5 rounded-2xl text-xs font-semibold flex items-center gap-2 shadow-apple-soft border-0 ${message.type === 'error' ? 'bg-rose-50 text-rose-600' : 'bg-emerald-50 text-emerald-700'}`}>
                 <AlertCircle size={16} /> {message.text}
               </div>
             )}
 
             <button 
               onClick={handlePasswordChange}
-              className="w-full py-4 mt-2 bg-slate-800 hover:bg-slate-900 text-white font-bold rounded-2xl active:scale-95 transition-all flex justify-center items-center gap-2"
+              className="w-full py-4 mt-2 bg-slate-900 hover:bg-slate-800 text-white font-bold rounded-full shadow-apple active:scale-95 transition-all flex justify-center items-center gap-2 cursor-pointer border-0"
             >
               <Save size={18} /> Lưu mật khẩu mới
             </button>
           </div>
         </div>
 
-        {/* Other settings can be added here */}
-        <div className="text-center pt-8 text-xs font-bold text-slate-400">
+        {/* Other settings */}
+        <div className="text-center pt-6 text-xs font-semibold text-slate-400">
           Phiên bản hệ thống: 1.2.0-cloud
         </div>
       </div>

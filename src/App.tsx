@@ -1,5 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { AnimatePresence } from 'motion/react';
+import { AlertTriangle, X } from 'lucide-react';
 import { 
   Product, 
   subscribeProducts, 
@@ -17,9 +18,10 @@ import InventoryScreen from './screens/InventoryScreen';
 import ScannerScreen from './screens/ScannerScreen';
 import { ChatScreen } from './screens/ChatScreen';
 import { CheckScreen } from './screens/CheckScreen';
-import { DestructionScreen } from './screens/DestructionScreen';
 import { ExpiryScreen, DataScreen } from './screens/OtherScreens';
 import { SettingsScreen } from './screens/SettingsScreen';
+import { FillScreen } from './screens/FillScreen';
+import { DisposalScreen } from './screens/DisposalScreen';
 
 export default function App() {
   const [currentUser, setCurrentUser] = useState<{ username: string; name: string; role: 'admin' | 'user' } | null>(() => getSavedUser());
@@ -82,8 +84,8 @@ export default function App() {
         setProducts(liveData);
         setIsLoading(false);
       },
-      (error) => {
-        console.error("Firestore live sync error:", error);
+      (error: any) => {
+        console.warn("Supabase live sync note:", error);
         setIsLoading(false);
       }
     );
@@ -161,10 +163,22 @@ export default function App() {
   const isFullHeightScreen = currentScreen === 'chat' || currentScreen === 'settings';
 
   return (
-    <div className="min-h-dvh w-full bg-[#f5f5f7] text-zinc-900 flex flex-col selection:bg-blue-100 selection:text-blue-900">
+    <div className="min-h-dvh w-full text-zinc-900 flex flex-col selection:bg-blue-100 selection:text-blue-900 relative">
+      {/* Soft atmospheric ambient backdrop for non-home screens */}
+      {currentScreen !== 'home' && (
+        <div className="fixed inset-0 pointer-events-none -z-10 overflow-hidden" aria-hidden="true">
+          <div className="absolute inset-0 bg-[#f1f5f9]" />
+          <div className="absolute -top-[15%] -left-[10%] w-[55vw] h-[55vw] max-w-[700px] max-h-[700px] rounded-full bg-emerald-200/40 blur-3xl" />
+          <div className="absolute top-[25%] -right-[10%] w-[50vw] h-[50vw] max-w-[650px] max-h-[650px] rounded-full bg-sky-200/45 blur-3xl" />
+          <div className="absolute -bottom-[15%] left-[25%] w-[45vw] h-[45vw] max-w-[600px] max-h-[600px] rounded-full bg-teal-100/40 blur-3xl" />
+          <div className="absolute inset-0 bg-gradient-to-b from-white/40 via-transparent to-slate-200/30" />
+        </div>
+      )}
+
       <main className={`w-full mx-auto flex-1 flex flex-col relative ${
-        isFullHeightScreen ? 'max-w-3xl h-dvh overflow-hidden' : 'max-w-5xl px-4 sm:px-6 lg:px-8 pt-safe pb-8'
+        isFullHeightScreen ? 'max-w-5xl h-dvh overflow-hidden px-4 sm:px-6 lg:px-8' : 'max-w-5xl px-4 sm:px-6 lg:px-8 pt-safe pb-10'
       }`}>
+
         <AnimatePresence mode="wait">
           {currentScreen === 'home' && (
             <HomeScreen 
@@ -178,8 +192,15 @@ export default function App() {
               products={products}
             />
           )}
+          {currentScreen === 'fill' && (
+            <FillScreen
+              key="fill"
+              onBack={() => setCurrentScreen('home')}
+              products={products}
+            />
+          )}
           {currentScreen === 'calculator' && (
-            <div key="calculator" className="max-w-lg mx-auto w-full">
+            <div key="calculator" className="w-full max-w-4xl lg:max-w-5xl mx-auto flex-1 flex flex-col">
               <CalculatorScreen onBack={() => setCurrentScreen('home')} />
             </div>
           )}
@@ -192,6 +213,13 @@ export default function App() {
               onAddProduct={handleAdd}
               onUpdateProduct={handleUpdate}
               initialOrderMode={orderMode}
+            />
+          )}
+          {currentScreen === 'disposal' && (
+            <DisposalScreen
+              key="disposal"
+              onBack={() => setCurrentScreen('home')}
+              products={products}
             />
           )}
           {currentScreen === 'check' && (
@@ -212,24 +240,18 @@ export default function App() {
               onUpdate={handleUpdate}
             />
           )}
-          {(currentScreen === 'destruction' || currentScreen === 'price') && (
-            <DestructionScreen 
-              key="destruction" 
-              onBack={() => setCurrentScreen('home')} 
-              onNavigateToData={() => setCurrentScreen('data')}
-            />
-          )}
           {currentScreen === 'data' && (
-            <div key="data" className="max-w-2xl mx-auto w-full">
+            <div key="data" className="w-full max-w-4xl lg:max-w-5xl mx-auto">
               <DataScreen 
                 onBack={() => setCurrentScreen('home')} 
                 products={products} 
                 onImport={handleImport} 
+                currentUser={currentUser}
               />
             </div>
           )}
           {currentScreen === 'scanner' && (
-            <div key="scanner" className="max-w-lg mx-auto w-full flex-1 flex flex-col">
+            <div key="scanner" className="w-full max-w-4xl lg:max-w-5xl mx-auto flex-1 flex flex-col">
               <ScannerScreen 
                 onBack={() => setCurrentScreen('home')} 
                 products={products} 

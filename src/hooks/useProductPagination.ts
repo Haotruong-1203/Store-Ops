@@ -1,47 +1,21 @@
-import { useState, useEffect, useRef, useCallback } from 'react';
-import { 
-  collection, 
-  query, 
-  orderBy, 
-  limit, 
-  startAfter, 
-  getDocs, 
-  QueryDocumentSnapshot, 
-  DocumentData,
-  onSnapshot
-} from 'firebase/firestore';
-import { db } from '../lib/firebase';
+import { useState, useRef, useCallback } from 'react';
+import { supabase } from '../lib/supabase';
 import { Product } from '../lib/firestoreService';
 
-export const mapDocToProduct = (docSnap: QueryDocumentSnapshot<DocumentData>): Product => {
-  const data = docSnap.data();
-  const prod: Product = {
-    id: docSnap.id,
-    userId: data.userId || '',
-    barcode: data.barcode || '',
-    internalCode: data.internalCode || undefined,
-    name: data.name || '',
-    mfgDate: data.mfgDate || '',
-    destructionDate: data.destructionDate || '',
-    destroyDaysBeforeExpiry: data.destroyDaysBeforeExpiry ?? 0,
-    price: Number(data.price) || 0,
-    expiryRecords: data.expiryRecords || [],
-    createdAt: data.createdAt,
-    updatedAt: data.updatedAt
-  };
-
-  if (!prod.expiryRecords || prod.expiryRecords.length === 0) {
-    if (prod.destructionDate) {
-      prod.expiryRecords = [{
-        id: 'rec-' + (prod.id || 'init') + '-1',
-        expDate: prod.destructionDate,
-        destructionDate: prod.destructionDate,
-        createdAt: new Date().toISOString()
-      }];
-    }
-  }
-  return prod;
-};
+export const mapDocToProduct = (row: any): Product => ({
+  id: row.id,
+  userId: row.userId || '',
+  barcode: row.barcode || '',
+  internalCode: row.internalCode || undefined,
+  name: row.name || '',
+  mfgDate: row.mfgDate || '',
+  destructionDate: row.destructionDate || '',
+  destroyDaysBeforeExpiry: row.destroyDaysBeforeExpiry ?? 0,
+  price: Number(row.price) || 0,
+  expiryRecords: row.expiryRecords || [],
+  createdAt: row.createdAt,
+  updatedAt: row.updatedAt
+});
 
 export interface UseProductPaginationReturn {
   products: Product[];
@@ -64,7 +38,6 @@ export const useProductPagination = (pageSize: number = 50): UseProductPaginatio
   const [hasMore, setHasMore] = useState<boolean>(true);
   const [error, setError] = useState<string | null>(null);
 
-  const lastDocRef = useRef<QueryDocumentSnapshot<DocumentData> | null>(null);
   const isFetchingRef = useRef<boolean>(false);
 
   const fetchInitialPage = useCallback(async () => {
@@ -73,33 +46,30 @@ export const useProductPagination = (pageSize: number = 50): UseProductPaginatio
     setError(null);
 
     try {
-      let q;
-      try {
-        q = query(
-          collection(db, 'products'),
-          orderBy('name', 'asc'),
-          limit(pageSize)
-        );
-      } catch {
-        q = query(
-          collection(db, 'products'),
-          limit(pageSize)
-        );
-      }
+      const { data, error: qErr } = await supabase
+        .from('products')
+        .select('*')
+        .order('name', { ascending: true })
+        .range(0, pageSize - 1);
 
-      const snapshot = await getDocs(q);
-      const items = snapshot.docs.map(mapDocToProduct);
+      if (qErr) throw qErr;
 
+      const items = (data || []).map(mapDocToProduct);
       setProducts(items);
-      if (snapshot.docs.length > 0) {
-        lastDocRef.current = snapshot.docs[snapshot.docs.length - 1];
-      } else {
-        lastDocRef.current = null;
-      }
-
-      setHasMore(snapshot.docs.length >= pageSize);
+      setHasMore(items.length >= pageSize);
+      try {
+        sessionStorage.setItem('cached_pagination_products', JSON.stringify(items.slice(0, 50)));
+      } catch {}
     } catch (err: any) {
-      console.error('Error fetching initial product page:', err);
+      const cachedStr = sessionStorage.getItem('cached_pagination_products');
+      if (cachedStr) {
+        try {
+          const parsed = JSON.parse(cachedStr);
+          if (Array.isArray(parsed) && parsed.length > 0) {
+            setProducts(parsed);
+          }
+        } catch {}
+      }
       setError(err?.message || 'Lỗi khi tải danh sách sản phẩm');
     } finally {
       setLoading(false);
@@ -108,59 +78,46 @@ export const useProductPagination = (pageSize: number = 50): UseProductPaginatio
   }, [pageSize]);
 
   const loadMore = useCallback(async () => {
-    if (isFetchingRef.current || !hasMore || !lastDocRef.current) return;
+    if (isFetchingRef.current || !hasMore) return;
 
     isFetchingRef.current = true;
     setLoadingMore(true);
 
     try {
-      let q;
-      try {
-        q = query(
-          collection(db, 'products'),
-          orderBy('name', 'asc'),
-          startAfter(lastDocRef.current),
-          limit(pageSize)
-        );
-      } catch {
-        q = query(
-          collection(db, 'products'),
-          startAfter(lastDocRef.current),
-          limit(pageSize)
-        );
-      }
+      const offset = products.length;
+      const { data, error: qErr } = await supabase
+        .from('products')
+        .select('*')
+        .order('name', { ascending: true })
+        .range(offset, offset + pageSize - 1);
 
-      const snapshot = await getDocs(q);
-      const newItems = snapshot.docs.map(mapDocToProduct);
+      if (qErr) throw qErr;
 
-      if (newItems.length > 0) {
+      const nextItems = (data || []).map(mapDocToProduct);
+      if (nextItems.length > 0) {
         setProducts(prev => {
           const existingIds = new Set(prev.map(p => p.id));
-          const filteredNew = newItems.filter(p => !existingIds.has(p.id));
-          return [...prev, ...filteredNew];
+          const filtered = nextItems.filter(p => !existingIds.has(p.id));
+          return [...prev, ...filtered];
         });
-        lastDocRef.current = snapshot.docs[snapshot.docs.length - 1];
-      }
-
-      if (snapshot.docs.length < pageSize) {
+        setHasMore(nextItems.length >= pageSize);
+      } else {
         setHasMore(false);
       }
     } catch (err: any) {
-      console.error('Error loading more products:', err);
-      setError(err?.message || 'Lỗi khi tải thêm sản phẩm');
+      setError(err?.message || 'Lỗi khi tải thêm');
     } finally {
       setLoadingMore(false);
       isFetchingRef.current = false;
     }
-  }, [hasMore, pageSize]);
+  }, [hasMore, pageSize, products.length]);
 
   const reset = useCallback(async () => {
-    lastDocRef.current = null;
+    setProducts([]);
     setHasMore(true);
     await fetchInitialPage();
   }, [fetchInitialPage]);
 
-  // Realtime updates optimization: update product locally without re-fetching all
   const updateProductLocally = useCallback((updated: Product) => {
     setProducts(prev => prev.map(p => p.id === updated.id ? updated : p));
   }, []);
@@ -173,9 +130,9 @@ export const useProductPagination = (pageSize: number = 50): UseProductPaginatio
     setProducts(prev => [newProd, ...prev]);
   }, []);
 
-  useEffect(() => {
+  useState(() => {
     fetchInitialPage();
-  }, [fetchInitialPage]);
+  });
 
   return {
     products,

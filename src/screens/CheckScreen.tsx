@@ -1,6 +1,6 @@
 import React, { useState } from 'react';
 import { motion, AnimatePresence } from 'motion/react';
-import { Plus, X, Calendar, AlertCircle, Receipt, Sparkles } from 'lucide-react';
+import { Plus, X, Calendar, AlertCircle, Receipt, Sparkles, Package } from 'lucide-react';
 import { Header, InputGroup } from '../components/SharedUI';
 import { SearchBar } from '../components/SearchBar';
 import { ProductList } from '../components/ProductList';
@@ -15,6 +15,8 @@ import {
   deleteProductOnline 
 } from '../lib/firestoreService';
 import { calculateDestructionDate, getProductRecords } from '../lib/utils';
+import { saveProductExpiry, deleteProductExpiry } from '../lib/expiryService';
+import { invalidateBarcodeCache } from '../hooks/useBarcodeSearch';
 
 export interface CheckScreenProps {
   onBack: () => void;
@@ -29,9 +31,9 @@ export const CheckScreen: React.FC<CheckScreenProps> = ({
   onBack, 
   onAdd, 
   onUpdate, 
-  onDelete 
+  onDelete,
+  products = []
 }) => {
-  // 1. Pagination Hook (Load 50 items/page, cursor-based pagination)
   const {
     products: paginatedProducts,
     loading: loadingPagination,
@@ -42,10 +44,10 @@ export const CheckScreen: React.FC<CheckScreenProps> = ({
     updateProductLocally: updatePaginationLocally,
     removeProductLocally: removePaginationLocally,
     addProductLocally: addPaginationLocally,
-    totalLoaded
+    totalLoaded,
+    error: paginationError
   } = useProductPagination(50);
 
-  // 2. Debounced Backend Search Hook
   const {
     searchTerm,
     setSearchTerm,
@@ -58,8 +60,8 @@ export const CheckScreen: React.FC<CheckScreenProps> = ({
     removeResultLocally
   } = useProductSearch(300);
 
-  // Display mode: If user typed search term, show search results; otherwise show paginated products
-  const displayProducts = isSearching ? searchResults : paginatedProducts;
+  const fallbackList = paginatedProducts.length > 0 ? paginatedProducts : (products || []);
+  const displayProducts = isSearching ? searchResults : fallbackList;
   const isLoading = isSearching ? loadingSearch : loadingPagination;
 
   // Modals state
@@ -89,6 +91,7 @@ export const CheckScreen: React.FC<CheckScreenProps> = ({
   });
 
   const [selectedProductForRecord, setSelectedProductForRecord] = useState<Product | null>(null);
+  const [isSavingRecord, setIsSavingRecord] = useState(false);
   const [newRecordForm, setNewRecordForm] = useState({
     expDate: '',
     destroyDays: '0',
@@ -270,63 +273,55 @@ export const CheckScreen: React.FC<CheckScreenProps> = ({
     }
 
     const daysBefore = newRecordForm.destroyDays === '' || isNaN(parseInt(newRecordForm.destroyDays)) ? 0 : parseInt(newRecordForm.destroyDays);
-    const finalDestructionDate = newRecordForm.destructionDate || calculateDestructionDate(newRecordForm.expDate, daysBefore);
 
-    const newRecord: ExpiryRecord = {
-      id: 'rec-' + Date.now(),
-      expDate: newRecordForm.expDate,
-      destructionDate: finalDestructionDate,
-      quantity: parseInt(newRecordForm.quantity) || undefined,
-      note: newRecordForm.note.trim() || undefined,
-      createdAt: new Date().toISOString()
-    };
+    setIsSavingRecord(true);
+    try {
+      const updatedProduct = await saveProductExpiry(
+        {
+          barcode: selectedProductForRecord.barcode,
+          exp_date: newRecordForm.expDate,
+          destroy_days: daysBefore
+        },
+        selectedProductForRecord
+      );
+      invalidateBarcodeCache(selectedProductForRecord.barcode);
+      if (onUpdate) {
+        await onUpdate(updatedProduct);
+      }
 
-    const currentRecords = getProductRecords(selectedProductForRecord);
-    const updatedRecords = [...currentRecords, newRecord].sort(
-      (a, b) => new Date(a.destructionDate).getTime() - new Date(b.destructionDate).getTime()
-    );
-
-    const updatedProduct: Product = {
-      ...selectedProductForRecord,
-      destructionDate: updatedRecords[0].destructionDate,
-      expiryRecords: updatedRecords,
-      updatedAt: new Date().toISOString()
-    };
-
-    if (onUpdate) {
-      await onUpdate(updatedProduct);
-    } else {
-      await updateProductOnline(updatedProduct);
+      updatePaginationLocally(updatedProduct);
+      updateResultLocally(updatedProduct);
+      setSelectedProductForRecord(null);
+      alert('Đã lưu hạn sử dụng thành công!');
+    } catch (err: any) {
+      console.error('Error saving expiry record:', err);
+      alert('Lỗi khi lưu hạn sử dụng: ' + (err.message || 'Không thể lưu đợt HSD'));
+    } finally {
+      setIsSavingRecord(false);
     }
-
-    updatePaginationLocally(updatedProduct);
-    updateResultLocally(updatedProduct);
-    setSelectedProductForRecord(null);
   };
 
-  const handleDeleteRecord = async (product: Product, recordId: string) => {
-    if (!confirm('Bạn có chắc muốn xóa record hạn sử dụng này không?')) return;
-    const currentRecords = getProductRecords(product);
-    const filteredRecords = currentRecords.filter(r => r.id !== recordId);
+  const handleDeleteRecord = async (product: Product, _recordId: string) => {
+    if (!confirm('Bạn có chắc muốn xóa hạn sử dụng này không?')) return;
+    await deleteProductExpiry(product.barcode, product.id);
+    invalidateBarcodeCache(product.barcode);
     
     const updatedProduct: Product = {
       ...product,
-      destructionDate: filteredRecords.length > 0 ? filteredRecords[0].destructionDate : '',
-      expiryRecords: filteredRecords,
+      destructionDate: '',
+      expiryRecords: [],
       updatedAt: new Date().toISOString()
     };
 
     if (onUpdate) {
       await onUpdate(updatedProduct);
-    } else {
-      await updateProductOnline(updatedProduct);
     }
 
     updatePaginationLocally(updatedProduct);
     updateResultLocally(updatedProduct);
   };
 
-  const inputClass = "w-full max-w-full box-border block p-3.5 bg-slate-50 border border-slate-200 rounded-2xl text-[0.95rem] font-medium text-slate-800 focus:outline-none focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500 transition-all";
+  const inputClass = "w-full max-w-full box-border block px-4 py-3.5 bg-slate-100/80 border-0 rounded-2xl text-[0.95rem] font-medium text-slate-800 outline-none focus:bg-white focus:ring-2 focus:ring-blue-500/20 transition-all shadow-2xs";
 
   return (
     <motion.div 
@@ -335,7 +330,7 @@ export const CheckScreen: React.FC<CheckScreenProps> = ({
       exit={{ opacity: 0, x: -20 }}
       className="flex flex-col h-full"
     >
-      <Header title="KIỂM HÀNG" onBack={onBack} />
+      <Header title="TÌM & KIỂM HÀNG" onBack={onBack} />
 
       {/* Optimized Search Bar with Debounce & Keyboard mode toggle */}
       <SearchBar
@@ -353,20 +348,20 @@ export const CheckScreen: React.FC<CheckScreenProps> = ({
         <motion.div
           initial={{ opacity: 0, y: -8 }}
           animate={{ opacity: 1, y: 0 }}
-          className="mb-3 p-3 bg-emerald-50 border border-emerald-200/90 rounded-2xl flex items-center justify-between gap-3 shadow-sm shrink-0"
+          className="mb-4 p-4 bg-white/95 backdrop-blur-md rounded-2xl flex items-center justify-between gap-3 shadow-apple-soft border-0 shrink-0"
         >
-          <div className="flex items-center gap-2 min-w-0">
-            <span className="w-2 h-2 rounded-full bg-emerald-500 shrink-0 animate-ping" />
+          <div className="flex items-center gap-3 min-w-0">
+            <span className="w-2.5 h-2.5 rounded-full bg-emerald-500 shrink-0 animate-ping" />
             <div className="min-w-0">
-              <div className="flex items-center gap-1.5 flex-wrap">
-                <span className="text-[0.68rem] font-bold uppercase tracking-wider text-emerald-700 bg-emerald-100/80 px-1.5 py-0.5 rounded">
+              <div className="flex items-center gap-2 flex-wrap">
+                <span className="text-xs font-bold uppercase tracking-wider text-emerald-800 bg-emerald-50 px-2 py-0.5 rounded-lg border-0">
                   Đã quét
                 </span>
-                <span className="text-xs font-bold text-slate-800 truncate">
+                <span className="text-sm font-bold text-slate-900 truncate">
                   {selectedProduct.name}
                 </span>
               </div>
-              <div className="text-[0.7rem] text-slate-500 font-mono mt-0.5">
+              <div className="text-xs text-slate-500 font-mono mt-1">
                 Mã: {selectedProduct.barcode}
               </div>
             </div>
@@ -374,11 +369,39 @@ export const CheckScreen: React.FC<CheckScreenProps> = ({
           <button
             type="button"
             onClick={() => setSelectedProduct(null)}
-            className="text-[0.7rem] font-bold text-slate-500 hover:text-slate-800 bg-white hover:bg-slate-100 border border-slate-200 px-2 py-1 rounded-xl shrink-0 transition-colors"
+            className="text-xs font-semibold text-slate-600 hover:text-slate-900 bg-slate-100 hover:bg-slate-200 px-3.5 py-1.5 rounded-full shrink-0 transition-colors border-0 cursor-pointer"
           >
-            Xóa lựa chọn
+            Bỏ chọn
           </button>
         </motion.div>
+      )}
+
+      {/* Database status banners */}
+      {paginationError && (paginationError.includes('Could not find the table') || paginationError.includes('PGRST205')) && (
+        <div className="mb-4 p-4 rounded-2xl bg-amber-50 border border-amber-200 text-amber-900 shadow-sm shrink-0">
+          <div className="flex items-center gap-2 font-bold text-sm mb-1 text-amber-800">
+            <AlertCircle className="text-amber-600 shrink-0" size={18} />
+            <span>Chưa tạo bảng trong Supabase!</span>
+          </div>
+          <p className="text-xs text-amber-800 leading-relaxed">
+            Database Supabase chưa có bảng <code className="bg-amber-100 px-1 py-0.5 rounded font-mono font-bold">products</code>. Bạn hãy vào trang <strong>Supabase Dashboard &gt; SQL Editor</strong>, dán đoạn mã SQL được cung cấp và nhấn <strong>Run</strong> để tạo bảng nhé!
+          </p>
+        </div>
+      )}
+
+      {!isLoading && !paginationError && displayProducts.length === 0 && !debouncedTerm && (
+        <div className="mb-4 p-4 rounded-2xl bg-blue-50 border border-blue-200 text-blue-900 shadow-sm shrink-0 text-center">
+          <div className="flex items-center justify-center gap-2 font-bold text-sm mb-1 text-blue-800">
+            <Package className="text-blue-600 shrink-0" size={18} />
+            <span>Database Supabase chưa có sản phẩm</span>
+          </div>
+          <p className="text-xs text-blue-700 leading-relaxed mb-1">
+            Sau khi chuyển sang Supabase, database hiện tại đang trống (0 sản phẩm).
+          </p>
+          <p className="text-xs font-semibold text-blue-800">
+            👉 Vui lòng vào tab <strong>"Dữ liệu"</strong> (mục Item Bán) để tải lên file Excel / CSV của bạn.
+          </p>
+        </div>
       )}
 
       {/* Virtualized Product List */}
@@ -400,12 +423,12 @@ export const CheckScreen: React.FC<CheckScreenProps> = ({
       {/* MODAL: TẠO MỚI SẢN PHẨM */}
       <AnimatePresence>
         {isAddProductModalOpen && (
-          <div className="fixed inset-0 z-50 flex items-end justify-center sm:items-center">
+          <div className="fixed inset-0 z-50 flex items-end justify-center sm:items-center p-0 sm:p-4">
             <motion.div 
               initial={{ opacity: 0 }} 
               animate={{ opacity: 1 }} 
               exit={{ opacity: 0 }} 
-              className="absolute inset-0 bg-slate-900/40 backdrop-blur-sm"
+              className="absolute inset-0 bg-slate-900/30 backdrop-blur-xs"
               onClick={() => setIsAddProductModalOpen(false)}
             />
             <motion.div 
@@ -413,24 +436,24 @@ export const CheckScreen: React.FC<CheckScreenProps> = ({
               animate={{ y: 0 }} 
               exit={{ y: '100%' }}
               transition={{ type: "spring", damping: 25, stiffness: 200 }}
-              className="relative w-full max-w-md bg-white rounded-t-[2rem] sm:rounded-[2rem] p-6 max-h-[90vh] overflow-y-auto shadow-2xl z-10"
+              className="relative w-full max-w-md bg-white/95 backdrop-blur-md rounded-t-[2.5rem] sm:rounded-3xl p-6 sm:p-8 max-h-[90vh] overflow-y-auto shadow-apple-lg border-0 z-10"
             >
-              <div className="flex justify-between items-center mb-4">
-                <h2 className="text-xl font-bold text-slate-800 flex items-center gap-2">
+              <div className="flex justify-between items-center mb-5">
+                <h2 className="text-xl font-bold text-slate-900 flex items-center gap-2">
                   <Plus className="text-blue-600" size={24} /> Tạo mới sản phẩm
                 </h2>
                 <button 
                   onClick={() => setIsAddProductModalOpen(false)}
-                  className="p-2 text-slate-400 hover:text-slate-600 rounded-full hover:bg-slate-100"
+                  className="p-2 text-slate-400 hover:text-slate-600 rounded-full hover:bg-slate-100 transition-colors border-0 cursor-pointer"
                 >
                   <X size={20} />
                 </button>
               </div>
 
               {/* QUICK SCAN PRICE TAG OPTION */}
-              <div className="mb-4 p-3 bg-amber-50 border border-amber-300 rounded-2xl flex flex-col gap-2">
-                <div className="flex items-center gap-1.5 text-amber-800 font-bold text-xs">
-                  <Sparkles size={15} className="text-amber-600 shrink-0" />
+              <div className="mb-5 p-4 bg-amber-50/80 rounded-2xl flex flex-col gap-2.5 border-0 shadow-apple-soft">
+                <div className="flex items-center gap-1.5 text-amber-900 font-bold text-xs">
+                  <Sparkles size={16} className="text-amber-600 shrink-0" />
                   Bạn có tem/bảng giá sản phẩm?
                 </div>
                 <button
@@ -439,7 +462,7 @@ export const CheckScreen: React.FC<CheckScreenProps> = ({
                     setIsAddProductModalOpen(false);
                     setScannerOpen(true);
                   }}
-                  className="w-full py-2.5 bg-amber-500 hover:bg-amber-600 active:scale-98 text-white rounded-xl text-xs font-bold flex items-center justify-center gap-2 shadow-sm transition-all cursor-pointer"
+                  className="w-full py-2.5 bg-amber-500 hover:bg-amber-600 active:scale-98 text-white rounded-full text-xs font-semibold flex items-center justify-center gap-2 shadow-apple-soft transition-all cursor-pointer border-0"
                 >
                   <Receipt size={16} />
                   Quét bảng giá để tự động nhập
@@ -498,9 +521,9 @@ export const CheckScreen: React.FC<CheckScreenProps> = ({
                   </InputGroup>
                 </div>
 
-                <div className="p-4 bg-slate-50 border border-slate-200/80 rounded-2xl space-y-3">
-                  <div className="text-xs font-bold text-slate-500 uppercase tracking-wider flex items-center gap-1">
-                    <Calendar size={13} className="text-blue-500" /> Hạn sử dụng đầu tiên (Tùy chọn)
+                <div className="p-5 bg-slate-100/70 rounded-2xl space-y-3.5 border-0">
+                  <div className="text-xs font-bold text-slate-500 uppercase tracking-wider flex items-center gap-1.5">
+                    <Calendar size={14} className="text-blue-500" /> Hạn sử dụng đầu tiên (Tùy chọn)
                   </div>
 
                   <div className="grid grid-cols-2 gap-3">
@@ -524,7 +547,7 @@ export const CheckScreen: React.FC<CheckScreenProps> = ({
                   </div>
 
                   {newProductForm.destructionDate && (
-                    <div className="p-3 bg-amber-50 border border-amber-200 rounded-xl text-xs font-semibold text-amber-800 flex items-center justify-between">
+                    <div className="p-3.5 bg-amber-50/90 rounded-2xl text-xs font-semibold text-amber-800 flex items-center justify-between border-0">
                       <span>Ngày phải hủy tính được:</span>
                       <span className="font-mono font-bold text-amber-900">{newProductForm.destructionDate}</span>
                     </div>
@@ -557,14 +580,14 @@ export const CheckScreen: React.FC<CheckScreenProps> = ({
                   <button 
                     type="button" 
                     onClick={() => setIsAddProductModalOpen(false)} 
-                    className="flex-1 py-3.5 bg-slate-100 hover:bg-slate-200 text-slate-700 font-bold rounded-2xl transition-all"
+                    className="flex-1 py-3.5 bg-slate-100 hover:bg-slate-200 text-slate-700 font-semibold rounded-full transition-all border-0 cursor-pointer"
                   >
                     Hủy
                   </button>
                   <button 
                     type="button" 
                     onClick={handleSaveNewProduct} 
-                    className="flex-1 py-3.5 bg-blue-600 hover:bg-blue-700 text-white font-bold rounded-2xl shadow-lg shadow-blue-500/30 transition-all"
+                    className="flex-1 py-3.5 bg-blue-600 hover:bg-blue-700 text-white font-semibold rounded-full shadow-apple-soft transition-all border-0 cursor-pointer"
                   >
                     Lưu sản phẩm
                   </button>
@@ -578,12 +601,12 @@ export const CheckScreen: React.FC<CheckScreenProps> = ({
       {/* MODAL: CHỈNH SỬA SẢN PHẨM */}
       <AnimatePresence>
         {isEditProductModalOpen && (
-          <div className="fixed inset-0 z-50 flex items-end justify-center sm:items-center">
+          <div className="fixed inset-0 z-50 flex items-end justify-center sm:items-center p-0 sm:p-4">
             <motion.div 
               initial={{ opacity: 0 }} 
               animate={{ opacity: 1 }} 
               exit={{ opacity: 0 }} 
-              className="absolute inset-0 bg-slate-900/40 backdrop-blur-sm"
+              className="absolute inset-0 bg-slate-900/30 backdrop-blur-xs"
               onClick={() => setIsEditProductModalOpen(false)}
             />
             <motion.div 
@@ -591,13 +614,13 @@ export const CheckScreen: React.FC<CheckScreenProps> = ({
               animate={{ y: 0 }} 
               exit={{ y: '100%' }}
               transition={{ type: "spring", damping: 25, stiffness: 200 }}
-              className="relative w-full max-w-md bg-white rounded-t-[2rem] sm:rounded-[2rem] p-6 max-h-[90vh] overflow-y-auto shadow-2xl z-10"
+              className="relative w-full max-w-md bg-white/95 backdrop-blur-md rounded-t-[2.5rem] sm:rounded-3xl p-6 sm:p-8 max-h-[90vh] overflow-y-auto shadow-apple-lg border-0 z-10"
             >
               <div className="flex justify-between items-center mb-5">
-                <h2 className="text-xl font-bold text-slate-800">Chỉnh sửa sản phẩm</h2>
+                <h2 className="text-xl font-bold text-slate-900">Chỉnh sửa sản phẩm</h2>
                 <button 
                   onClick={() => setIsEditProductModalOpen(false)}
-                  className="p-2 text-slate-400 hover:text-slate-600 rounded-full hover:bg-slate-100"
+                  className="p-2 text-slate-400 hover:text-slate-600 rounded-full hover:bg-slate-100 transition-colors border-0 cursor-pointer"
                 >
                   <X size={20} />
                 </button>
@@ -664,14 +687,14 @@ export const CheckScreen: React.FC<CheckScreenProps> = ({
                   <button 
                     type="button" 
                     onClick={() => setIsEditProductModalOpen(false)} 
-                    className="flex-1 py-3.5 bg-slate-100 hover:bg-slate-200 text-slate-700 font-bold rounded-2xl transition-all"
+                    className="flex-1 py-3.5 bg-slate-100 hover:bg-slate-200 text-slate-700 font-semibold rounded-full transition-all border-0 cursor-pointer"
                   >
                     Hủy
                   </button>
                   <button 
                     type="button" 
                     onClick={handleSaveEditProduct} 
-                    className="flex-1 py-3.5 bg-blue-600 hover:bg-blue-700 text-white font-bold rounded-2xl shadow-lg shadow-blue-500/30 transition-all"
+                    className="flex-1 py-3.5 bg-blue-600 hover:bg-blue-700 text-white font-semibold rounded-full shadow-apple-soft transition-all border-0 cursor-pointer"
                   >
                     Lưu thay đổi
                   </button>
@@ -685,12 +708,12 @@ export const CheckScreen: React.FC<CheckScreenProps> = ({
       {/* MODAL: THÊM HẠN SỬ DỤNG MỚI */}
       <AnimatePresence>
         {selectedProductForRecord && (
-          <div className="fixed inset-0 z-50 flex items-end justify-center sm:items-center">
+          <div className="fixed inset-0 z-50 flex items-end justify-center sm:items-center p-0 sm:p-4">
             <motion.div 
               initial={{ opacity: 0 }} 
               animate={{ opacity: 1 }} 
               exit={{ opacity: 0 }} 
-              className="absolute inset-0 bg-slate-900/40 backdrop-blur-sm"
+              className="absolute inset-0 bg-slate-900/30 backdrop-blur-xs"
               onClick={() => setSelectedProductForRecord(null)}
             />
             <motion.div 
@@ -698,11 +721,11 @@ export const CheckScreen: React.FC<CheckScreenProps> = ({
               animate={{ y: 0 }} 
               exit={{ y: '100%' }}
               transition={{ type: "spring", damping: 25, stiffness: 200 }}
-              className="relative w-full max-w-md bg-white rounded-t-[2rem] sm:rounded-[2rem] p-6 max-h-[90vh] overflow-y-auto shadow-2xl z-10"
+              className="relative w-full max-w-md bg-white/95 backdrop-blur-md rounded-t-[2.5rem] sm:rounded-3xl p-6 sm:p-8 max-h-[90vh] overflow-y-auto shadow-apple-lg border-0 z-10"
             >
               <div className="flex justify-between items-center mb-5">
                 <div>
-                  <h2 className="text-xl font-bold text-slate-800 flex items-center gap-2">
+                  <h2 className="text-xl font-bold text-slate-900 flex items-center gap-2">
                     <Calendar className="text-emerald-600" size={24} /> Thêm đợt HSD
                   </h2>
                   <p className="text-xs text-slate-500 font-semibold mt-0.5 truncate max-w-[280px]">
@@ -711,7 +734,7 @@ export const CheckScreen: React.FC<CheckScreenProps> = ({
                 </div>
                 <button 
                   onClick={() => setSelectedProductForRecord(null)}
-                  className="p-2 text-slate-400 hover:text-slate-600 rounded-full hover:bg-slate-100"
+                  className="p-2 text-slate-400 hover:text-slate-600 rounded-full hover:bg-slate-100 transition-colors border-0 cursor-pointer"
                 >
                   <X size={20} />
                 </button>
@@ -739,7 +762,7 @@ export const CheckScreen: React.FC<CheckScreenProps> = ({
                 </div>
 
                 {newRecordForm.destructionDate && (
-                  <div className="p-3 bg-amber-50 border border-amber-200 rounded-xl text-xs font-semibold text-amber-800 flex items-center justify-between">
+                  <div className="p-3.5 bg-amber-50/90 rounded-2xl text-xs font-semibold text-amber-800 flex items-center justify-between border-0">
                     <span>Ngày phải hủy:</span>
                     <span className="font-mono font-bold text-amber-900">{newRecordForm.destructionDate}</span>
                   </div>
@@ -771,16 +794,17 @@ export const CheckScreen: React.FC<CheckScreenProps> = ({
                   <button 
                     type="button" 
                     onClick={() => setSelectedProductForRecord(null)} 
-                    className="flex-1 py-3.5 bg-slate-100 hover:bg-slate-200 text-slate-700 font-bold rounded-2xl transition-all"
+                    className="flex-1 py-3.5 bg-slate-100 hover:bg-slate-200 text-slate-700 font-semibold rounded-full transition-all border-0 cursor-pointer"
                   >
                     Hủy
                   </button>
                   <button 
                     type="button" 
                     onClick={handleSaveRecord} 
-                    className="flex-1 py-3.5 bg-emerald-600 hover:bg-emerald-700 text-white font-bold rounded-2xl shadow-lg shadow-emerald-500/30 transition-all"
+                    disabled={isSavingRecord}
+                    className="flex-1 py-3.5 bg-emerald-600 hover:bg-emerald-700 disabled:opacity-50 text-white font-semibold rounded-full shadow-apple-soft transition-all border-0 cursor-pointer flex items-center justify-center gap-2"
                   >
-                    Thêm đợt HSD
+                    {isSavingRecord ? 'Đang lưu...' : 'Thêm đợt HSD'}
                   </button>
                 </div>
               </div>

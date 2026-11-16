@@ -28,26 +28,30 @@ import {
   FileText,
   Copy,
   Check,
-  HelpCircle
+  HelpCircle,
+  Lock,
+  Loader2
 } from 'lucide-react';
 import { Header, Card, EmptyState, InputGroup } from '../components/SharedUI';
-import { Product, ExpiryRecord, clearProductsCollection, addProductsBulk } from '../lib/firestoreService';
-import { subscribeConsumables, addConsumablesBulk, clearConsumablesCollection, ConsumableItem } from '../lib/consumableService';
-import { getCountFromServer, getAggregateFromServer, sum, collection } from 'firebase/firestore';
-import { db } from '../lib/firebase';
+import { BarcodeScannerModal } from '../components/BarcodeScannerModal';
+import { Product, ExpiryRecord, clearProductsCollection, addProductsBulk, updateProductOnline } from '../lib/firestoreService';
 import { 
-  subscribeDestructionItems, 
-  saveDestructionBatchOnline, 
-  clearDestructionCollection, 
-  DestructionItem, 
-  INITIAL_SAMPLE_DESTRUCTION_ITEMS 
-} from '../lib/destructionService';
+  EnrichedExpiryItem, 
+  subscribeProductExpiries, 
+  saveProductExpiry, 
+  deleteProductExpiry 
+} from '../lib/expiryService';
+import { useProductSearch } from '../hooks/useProductSearch';
+import { invalidateBarcodeCache } from '../hooks/useBarcodeSearch';
+import { subscribeConsumables, addConsumablesBulk, clearConsumablesCollection, ConsumableItem } from '../lib/consumableService';
+import { supabase } from '../lib/supabase';
 import { 
   formatDate, 
   getStatus, 
   calculateDestructionDate, 
   getProductRecords, 
-  getEarliestDestructionDate 
+  getEarliestDestructionDate,
+  isValidRealExpiryDate 
 } from '../lib/utils';
 
 interface CheckScreenProps {
@@ -315,11 +319,11 @@ export const CheckScreen: React.FC<CheckScreenProps> = ({
     }
   };
 
-  const inputClass = "w-full max-w-full box-border block p-3.5 bg-slate-50 border border-slate-200 rounded-2xl text-[0.95rem] font-medium text-slate-800 focus:outline-none focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500 transition-all";
+  const inputClass = "w-full max-w-full box-border block px-4 py-3.5 bg-slate-100/80 border-0 rounded-2xl text-[0.95rem] font-medium text-slate-800 outline-none focus:bg-white focus:ring-2 focus:ring-blue-500/20 transition-all shadow-2xs";
 
   return (
     <motion.div initial={{ opacity: 0, x: 20 }} animate={{ opacity: 1, x: 0 }} exit={{ opacity: 0, x: -20 }}>
-      <Header title="KIỂM HÀNG" onBack={onBack} />
+      <Header title="TÌM & KIỂM HÀNG" onBack={onBack} />
       
       {/* Search Input Bar */}
       <div className="mb-4 space-y-2">
@@ -331,7 +335,7 @@ export const CheckScreen: React.FC<CheckScreenProps> = ({
             pattern={searchKeyboardMode === 'numeric' ? '[0-9]*' : undefined}
             autoComplete="off"
             placeholder={searchKeyboardMode === 'numeric' ? 'Nhập mã vạch hoặc mã nội bộ (bàn phím số)...' : 'Nhập tên sản phẩm để tìm...'} 
-            className="w-full py-4 pl-12 pr-28 bg-white border border-slate-200/80 rounded-2xl shadow-sm text-[0.95rem] focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500 focus:outline-none transition-all"
+            className="w-full py-3.5 pl-12 pr-28 bg-white/95 rounded-2xl shadow-apple text-[0.95rem] border-0 focus:ring-2 focus:ring-blue-500/20 focus:outline-none transition-all"
             value={search}
             onChange={e => setSearch(e.target.value)}
           />
@@ -347,7 +351,7 @@ export const CheckScreen: React.FC<CheckScreenProps> = ({
             <button 
               type="button"
               onClick={() => setSearchKeyboardMode(prev => prev === 'numeric' ? 'text' : 'numeric')}
-              className={`text-[0.72rem] font-bold px-2 py-1 rounded-xl border transition-all flex items-center gap-1 ${searchKeyboardMode === 'numeric' ? 'bg-blue-50 border-blue-200 text-blue-700' : 'bg-slate-100 border-slate-200 text-slate-600'}`}
+              className={`text-[0.72rem] font-bold px-2 py-1 rounded-xl border-0 transition-all flex items-center gap-1 ${searchKeyboardMode === 'numeric' ? 'bg-blue-50 text-blue-700 border-0 shadow-apple-soft' : 'bg-slate-100 text-slate-600 border-0 shadow-apple-soft'}`}
               title="Đổi loại bàn phím (Số / Chữ)"
             >
               {searchKeyboardMode === 'numeric' ? '🔢 Số' : '🔤 Chữ'}
@@ -407,7 +411,7 @@ export const CheckScreen: React.FC<CheckScreenProps> = ({
                 key={product.id}
                 initial={{ opacity: 0, y: 10 }}
                 animate={{ opacity: 1, y: 0 }}
-                className="bg-white border border-slate-100 rounded-[1.5rem] p-5 shadow-sm hover:shadow-md transition-shadow"
+                className="bg-white/90 backdrop-blur-md rounded-3xl p-5 shadow-apple border-0 transition-all"
               >
                 {/* Product Header */}
                 <div className="flex justify-between items-start gap-2 mb-3">
@@ -419,7 +423,7 @@ export const CheckScreen: React.FC<CheckScreenProps> = ({
                         {product.barcode}
                       </span>
                       {product.internalCode && (
-                        <span className="inline-flex items-center gap-1 text-[0.75rem] font-bold text-indigo-700 bg-indigo-50 px-2 py-0.5 rounded-md border border-indigo-100">
+                        <span className="inline-flex items-center gap-1 text-[0.75rem] font-bold text-indigo-700 bg-indigo-50 px-2 py-0.5 rounded-md border-0 shadow-apple-soft">
                           <Tag size={12} className="text-indigo-400" />
                           #{product.internalCode}
                         </span>
@@ -448,13 +452,13 @@ export const CheckScreen: React.FC<CheckScreenProps> = ({
                 <div className="flex justify-end gap-2 mb-2">
                   <button 
                     onClick={() => handleOpenEditProduct(product)}
-                    className="text-[0.75rem] font-bold text-slate-600 hover:text-blue-600 bg-slate-50 hover:bg-blue-50 px-3 py-1.5 rounded-lg transition-all flex items-center gap-1 active:scale-95 border border-slate-200"
+                    className="text-[0.75rem] font-bold text-slate-600 hover:text-blue-600 bg-slate-50 hover:bg-blue-50 px-3 py-1.5 rounded-lg transition-all flex items-center gap-1 active:scale-95 border-0 shadow-apple-soft"
                   >
                     Sửa
                   </button>
                   <button 
                     onClick={() => handleDeleteProduct(product)}
-                    className="text-[0.75rem] font-bold text-rose-500 hover:text-rose-600 bg-rose-50 hover:bg-rose-100 px-3 py-1.5 rounded-lg transition-all flex items-center gap-1 active:scale-95 border border-rose-100"
+                    className="text-[0.75rem] font-bold text-rose-500 hover:text-rose-600 bg-rose-50 hover:bg-rose-100 px-3 py-1.5 rounded-lg transition-all flex items-center gap-1 active:scale-95 border-0 shadow-apple-soft"
                   >
                     <Trash2 size={14} /> Xóa
                   </button>
@@ -568,7 +572,7 @@ export const CheckScreen: React.FC<CheckScreenProps> = ({
                 </InputGroup>
 
                 {/* Initial Expiry Record Form */}
-                <div className="bg-slate-50 p-4 rounded-2xl border border-slate-200/80">
+                <div className="bg-slate-50 p-4 rounded-2xl border-0 shadow-apple-soft/80">
                   <div className="text-[0.82rem] font-bold text-slate-700 uppercase tracking-wider mb-2.5 flex items-center gap-1.5">
                     <Calendar size={15} className="text-blue-500" />
                     Thêm hạn sắp hết / Lô đầu tiên (Tùy chọn)
@@ -586,7 +590,7 @@ export const CheckScreen: React.FC<CheckScreenProps> = ({
                     </div>
 
                     {newProductForm.expDate && (
-                      <div className="p-3 bg-blue-50/80 border border-blue-100 rounded-xl text-[0.82rem] flex justify-between items-center">
+                      <div className="p-3 bg-blue-50/80 border-0 shadow-apple-soft rounded-xl text-[0.82rem] flex justify-between items-center">
                         <span className="font-semibold text-blue-900">Ngày phải hủy:</span>
                         <span className="font-mono font-bold text-rose-600 text-[0.95rem]">
                           {formatDate(newProductForm.destructionDate)}
@@ -829,7 +833,7 @@ export const CheckScreen: React.FC<CheckScreenProps> = ({
                 </div>
 
                 {newRecordForm.expDate && (
-                  <div className="p-3 bg-rose-50 border border-rose-100 rounded-2xl flex justify-between items-center">
+                  <div className="p-3 bg-rose-50 border-0 shadow-apple-soft rounded-2xl flex justify-between items-center">
                     <span className="text-[0.82rem] font-semibold text-rose-800">Ngày phải hủy:</span>
                     <span className="font-mono font-bold text-rose-600 text-base">
                       {formatDate(newRecordForm.destructionDate)}
@@ -875,371 +879,397 @@ export const ExpiryScreen: React.FC<{
   products: Product[];
   onUpdate?: (p: Product) => Promise<void>;
 }> = ({ onBack, products, onUpdate }) => {
-  const [filterMode, setFilterMode] = useState<'all' | 'warning' | 'expired'>('all');
-
-  // Flatten all expiry records across all products
-  const allRecords = useMemo(() => {
-    const list: Array<{
-      product: Product;
-      record: ExpiryRecord;
-      status: ReturnType<typeof getStatus>;
-    }> = [];
-
-    products.forEach(p => {
-      const records = getProductRecords(p);
-      records.forEach(rec => {
-        const st = getStatus(rec.destructionDate);
-        list.push({
-          product: p,
-          record: rec,
-          status: st
-        });
-      });
-    });
-
-    // Sort by earliest destruction date
-    return list.sort((a, b) => new Date(a.record.destructionDate).getTime() - new Date(b.record.destructionDate).getTime());
-  }, [products]);
-
-  const [isAddRecordModalOpen, setIsAddRecordModalOpen] = useState(false);
-  const [recordSearch, setRecordSearch] = useState('');
+  const [expiryItems, setExpiryItems] = useState<EnrichedExpiryItem[]>([]);
+  const [loadingExpiries, setLoadingExpiries] = useState<boolean>(true);
+  const [isScannerModalOpen, setIsScannerModalOpen] = useState<boolean>(false);
   const [selectedProduct, setSelectedProduct] = useState<Product | null>(null);
+  const [isSavingNewRecord, setIsSavingNewRecord] = useState<boolean>(false);
   const [newRecordForm, setNewRecordForm] = useState({
     expDate: '',
-    destroyDays: '0',
-    destructionDate: '',
-    quantity: '',
-    note: ''
+    destroyDays: '15',
+    destructionDate: ''
   });
 
-  const searchLower = recordSearch.trim().toLowerCase();
-  const filteredProductsForRecord = useMemo(() => {
-    if (!searchLower) return [];
-    return products.filter(p => 
-      p.name.toLowerCase().includes(searchLower) || 
-      p.barcode.toLowerCase().includes(searchLower) ||
-      (p.internalCode && p.internalCode.toLowerCase().includes(searchLower))
-    );
-  }, [products, searchLower]);
+  const {
+    searchTerm: recordSearch,
+    setSearchTerm: setRecordSearch,
+    results: searchProductsResults,
+    loading: loadingSearchProducts,
+    isSearching: isSearchingProducts,
+    clearSearch: clearProductSearch
+  } = useProductSearch(250);
 
-  const handleOpenAddRecordModal = () => {
-    setIsAddRecordModalOpen(true);
-    setRecordSearch('');
-    setSelectedProduct(null);
-  };
-
-  const handleSelectProductForRecord = (p: Product) => {
-    setSelectedProduct(p);
-    setNewRecordForm({
-      expDate: '',
-      destroyDays: String(p.destroyDaysBeforeExpiry ?? 0),
-      destructionDate: '',
-      quantity: '',
-      note: ''
+  useEffect(() => {
+    setLoadingExpiries(true);
+    const unsub = subscribeProductExpiries(products, (items) => {
+      setExpiryItems(items);
+      setLoadingExpiries(false);
     });
+    return () => unsub();
+  }, [products]);
+
+  const expiryByBarcode = useMemo(() => {
+    const map = new Map<string, EnrichedExpiryItem>();
+    expiryItems.forEach(item => {
+      map.set(item.barcode, item);
+    });
+    return map;
+  }, [expiryItems]);
+
+  const handleSelectProductForRecord = (p: Partial<Product> & { barcode: string; name: string }) => {
+    const bc = (p.barcode || '').trim();
+    const existingExp = expiryByBarcode.get(bc);
+    const defaultDays = String(existingExp ? existingExp.destroy_days : (p.destroyDaysBeforeExpiry ?? 15));
+    const defaultExpDate = existingExp ? existingExp.exp_date : '';
+    const defaultDestruction = defaultExpDate
+      ? calculateDestructionDate(defaultExpDate, parseInt(defaultDays) || 0)
+      : '';
+
+    setSelectedProduct({
+      id: p.id || ('bc_' + bc),
+      barcode: bc,
+      name: p.name || `Sản phẩm (${bc})`,
+      internalCode: p.internalCode,
+      price: Number(p.price) || 0,
+      destroyDaysBeforeExpiry: Number(defaultDays) || 0,
+      destructionDate: defaultDestruction,
+      expiryRecords: p.expiryRecords || []
+    });
+    setNewRecordForm({
+      expDate: defaultExpDate,
+      destroyDays: defaultDays,
+      destructionDate: defaultDestruction
+    });
+    clearProductSearch();
   };
 
   const handleSaveNewRecord = async () => {
     if (!selectedProduct || !newRecordForm.expDate) {
-      alert('Vui lòng chọn sản phẩm và nhập HSD!');
+      alert('Vui lòng chọn Hạn sử dụng (HSD)!');
       return;
     }
-    
-    const daysBefore = newRecordForm.destroyDays === '' || isNaN(parseInt(newRecordForm.destroyDays)) ? 0 : parseInt(newRecordForm.destroyDays);
-    const finalDestructionDate = newRecordForm.destructionDate || calculateDestructionDate(newRecordForm.expDate, daysBefore);
-    
-    const newRecord: ExpiryRecord = {
-      id: 'rec-' + Date.now(),
-      expDate: newRecordForm.expDate,
-      destructionDate: finalDestructionDate,
-      quantity: parseInt(newRecordForm.quantity) || undefined,
-      note: newRecordForm.note.trim() || undefined,
-      createdAt: new Date().toISOString()
-    };
-    
-    const currentRecords = getProductRecords(selectedProduct);
-    const updatedRecords = [...currentRecords, newRecord].sort(
-      (a, b) => new Date(a.destructionDate).getTime() - new Date(b.destructionDate).getTime()
-    );
-    
-    if (onUpdate) {
-      await onUpdate({
-        ...selectedProduct,
-        destructionDate: updatedRecords[0].destructionDate,
-        expiryRecords: updatedRecords
-      });
-    }
-    
-    setIsAddRecordModalOpen(false);
-  };
 
-  const filteredRecords = useMemo(() => {
-    if (filterMode === 'expired') {
-      return allRecords.filter(item => item.status.isExpired);
-    }
-    if (filterMode === 'warning') {
-      return allRecords.filter(item => item.status.isNear || item.status.isExpired);
-    }
-    return allRecords;
-  }, [allRecords, filterMode]);
+    const daysBefore = newRecordForm.destroyDays === '' || isNaN(parseInt(newRecordForm.destroyDays))
+      ? 0
+      : parseInt(newRecordForm.destroyDays);
 
-  const expiredCount = allRecords.filter(r => r.status.isExpired).length;
-  const warningCount = allRecords.filter(r => r.status.isNear).length;
-
-  const handleDeleteRecord = async (product: Product, recordId: string) => {
-    const currentRecords = getProductRecords(product);
-    const updated = currentRecords.filter(r => r.id !== recordId);
-    
-    if (onUpdate) {
-      await onUpdate({
-        ...product,
-        destructionDate: updated.length > 0 ? updated[0].destructionDate : '',
-        expiryRecords: updated
-      });
+    setIsSavingNewRecord(true);
+    try {
+      const updatedProduct = await saveProductExpiry(
+        {
+          barcode: selectedProduct.barcode,
+          exp_date: newRecordForm.expDate,
+          destroy_days: daysBefore
+        },
+        selectedProduct
+      );
+      invalidateBarcodeCache(selectedProduct.barcode);
+      if (onUpdate) {
+        await onUpdate(updatedProduct);
+      }
+      setSelectedProduct(null);
+      clearProductSearch();
+    } catch (err: any) {
+      console.error('Error saving expiry record in ExpiryScreen:', err);
+      alert('Lỗi khi lưu hạn sử dụng: ' + (err.message || 'Không thể lưu hạn sử dụng'));
+    } finally {
+      setIsSavingNewRecord(false);
     }
   };
 
-  const inputClass = "w-full max-w-full box-border block p-3.5 bg-slate-50 border border-slate-200 rounded-2xl text-[0.95rem] font-medium text-slate-800 focus:outline-none focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500 transition-all";
+  const handleDeleteRecord = async (item: EnrichedExpiryItem, e?: React.MouseEvent) => {
+    if (e) e.stopPropagation();
+    if (!confirm(`Xóa hạn sử dụng của "${item.product.name}"?`)) return;
+
+    try {
+      await deleteProductExpiry(item.barcode, item.product.id);
+      invalidateBarcodeCache(item.barcode);
+      if (onUpdate && item.product.id) {
+        await onUpdate({
+          ...item.product,
+          destructionDate: '',
+          expiryRecords: [],
+          updatedAt: new Date().toISOString()
+        });
+      }
+    } catch (err: any) {
+      console.error('Error deleting expiry record:', err);
+      alert('Lỗi khi xóa hạn sử dụng: ' + (err.message || 'Lỗi'));
+    }
+  };
+
+  const inputClass = "w-full max-w-full box-border block px-4 py-3.5 bg-slate-100/80 border-0 rounded-2xl text-[0.95rem] font-medium text-slate-800 outline-none focus:bg-white focus:ring-2 focus:ring-blue-500/20 transition-all shadow-2xs";
 
   return (
     <motion.div initial={{ opacity: 0, x: 20 }} animate={{ opacity: 1, x: 0 }} exit={{ opacity: 0, x: -20 }}>
-      <Header title="KIỂM HSD" onBack={onBack} />
+      <Header 
+        title="HẠN SỬ DỤNG" 
+        onBack={onBack}
+      />
 
-      <div className="flex justify-end mb-4">
-        <button 
-          onClick={handleOpenAddRecordModal}
-          className="bg-blue-600 hover:bg-blue-700 text-white px-3.5 py-2 rounded-xl font-bold flex items-center gap-1.5 shadow-sm transition-all active:scale-95 text-xs cursor-pointer"
-        >
-          <Plus size={16} /> Mới
-        </button>
-      </div>
-
-      {/* Filter Tabs */}
-      <div className="flex gap-2 mb-4">
-        <button 
-          onClick={() => setFilterMode('all')}
-          className={`flex-1 py-2.5 px-3 rounded-xl text-[0.8rem] font-bold transition-all ${filterMode === 'all' ? 'bg-slate-800 text-white shadow-sm' : 'bg-white text-slate-600 hover:bg-slate-100'}`}
-        >
-          Tất cả ({allRecords.length})
-        </button>
-        <button 
-          onClick={() => setFilterMode('warning')}
-          className={`flex-1 py-2.5 px-3 rounded-xl text-[0.8rem] font-bold transition-all ${filterMode === 'warning' ? 'bg-amber-500 text-white shadow-sm' : 'bg-white text-amber-700 hover:bg-amber-50'}`}
-        >
-          Cần lưu ý ({warningCount})
-        </button>
-        <button 
-          onClick={() => setFilterMode('expired')}
-          className={`flex-1 py-2.5 px-3 rounded-xl text-[0.8rem] font-bold transition-all ${filterMode === 'expired' ? 'bg-rose-500 text-white shadow-sm' : 'bg-white text-rose-700 hover:bg-rose-50'}`}
-        >
-          Quá date ({expiredCount})
-        </button>
-      </div>
-
-      {/* Records List */}
-      <div className="pb-28 space-y-3">
-        {filteredRecords.length === 0 ? (
-          <EmptyState icon={<Clock size={48} />} message="Không có record nào trong mục này" />
-        ) : (
-          filteredRecords.map(({ product, record, status }) => (
-            <motion.div 
-              key={record.id}
-              initial={{ opacity: 0, y: 10 }} 
-              animate={{ opacity: 1, y: 0 }} 
-              className={`p-4 sm:p-5 rounded-[1.5rem] bg-gradient-to-br ${status.cls} text-white shadow-lg relative overflow-hidden`}
-            >
-              <div className="flex justify-between items-start gap-2">
-                <div className="flex-1">
-                  <div className="text-[0.72rem] uppercase font-bold tracking-wider opacity-90 mb-1 flex items-center gap-1.5 flex-wrap">
-                    <span>{product.name}</span>
-                    <span className="opacity-75 font-mono">({product.barcode})</span>
-                    {product.internalCode && (
-                      <span className="bg-white/20 px-1.5 py-0.2 rounded text-[0.68rem]">#{product.internalCode}</span>
-                    )}
-                  </div>
-                  <div className="text-xl sm:text-2xl font-black mb-1 font-mono">
-                    Hủy: {formatDate(record.destructionDate)}
-                  </div>
-                  <div className="text-[0.82rem] font-medium opacity-95">
-                    HSD gốc: {formatDate(record.expDate)} • {status.txt}
-                  </div>
-                  {(record.quantity || record.note) && (
-                    <div className="mt-2 text-[0.75rem] bg-black/15 p-2 rounded-lg inline-block">
-                      {record.quantity && <span className="font-bold mr-2">SL: {record.quantity}</span>}
-                      {record.note && <span>"{record.note}"</span>}
-                    </div>
-                  )}
-                </div>
-
-                <button 
-                  onClick={() => handleDeleteRecord(product, record.id)}
-                  className="p-2 bg-white/20 hover:bg-white/30 rounded-xl transition-all active:scale-95 text-white"
-                  title="Xóa / Đã hủy lô này"
-                >
-                  <Trash2 size={18} />
-                </button>
+      <div className="relative mb-5">
+        <div className="flex items-center gap-2">
+          <div className="relative flex-1">
+            <input
+              type="text"
+              placeholder="Gõ tên, mã vạch, mã nội bộ để tìm & thêm HSD..."
+              value={recordSearch}
+              onChange={(e) => setRecordSearch(e.target.value)}
+              className="w-full pl-11 pr-10 py-3.5 bg-white/95 backdrop-blur-md border-0 rounded-2xl text-xs sm:text-sm font-medium text-slate-800 placeholder-slate-400 outline-none focus:ring-2 focus:ring-blue-500/20 shadow-apple-soft transition-all"
+            />
+            <Search size={18} className="absolute left-4 top-1/2 -translate-y-1/2 text-slate-400 pointer-events-none" />
+            {loadingSearchProducts ? (
+              <div className="absolute right-3.5 top-1/2 -translate-y-1/2 text-blue-600">
+                <Loader2 size={16} className="animate-spin" />
               </div>
-            </motion.div>
-          ))
+            ) : recordSearch ? (
+              <button
+                type="button"
+                onClick={clearProductSearch}
+                className="absolute right-3.5 top-1/2 -translate-y-1/2 p-1 text-slate-400 hover:text-slate-600 rounded-full hover:bg-slate-100 transition-colors border-0 cursor-pointer"
+              >
+                <X size={15} />
+              </button>
+            ) : null}
+          </div>
+
+          <button
+            type="button"
+            onClick={() => setIsScannerModalOpen(true)}
+            className="px-4 py-3.5 bg-blue-600 hover:bg-blue-700 active:scale-95 text-white font-bold rounded-2xl shadow-apple-soft flex items-center justify-center gap-2 text-xs sm:text-sm transition-all cursor-pointer border-0 shrink-0"
+          >
+            <Camera size={18} />
+            <span>Quét mã</span>
+          </button>
+        </div>
+
+        {isSearchingProducts && (
+          <div className="mt-2 bg-white/98 backdrop-blur-xl rounded-3xl shadow-apple-lg border border-slate-100 overflow-hidden z-30 max-h-80 overflow-y-auto p-2 space-y-1.5">
+            {loadingSearchProducts ? (
+              <div className="text-center py-6 text-slate-400 text-xs flex items-center justify-center gap-2">
+                <Loader2 className="animate-spin text-blue-600" size={16} />
+                <span>Đang tìm trong danh mục hàng hóa...</span>
+              </div>
+            ) : searchProductsResults.length === 0 ? (
+              <div className="text-center py-6 text-slate-400 text-xs">
+                Không tìm thấy sản phẩm nào khớp với "{recordSearch}"
+              </div>
+            ) : (
+              searchProductsResults.map(p => {
+                const tracked = expiryByBarcode.get((p.barcode || '').trim());
+                return (
+                  <div
+                    key={p.id || p.barcode}
+                    onClick={() => handleSelectProductForRecord(p)}
+                    className="p-3 bg-slate-50/80 hover:bg-blue-50/90 rounded-2xl cursor-pointer transition-all flex justify-between items-center gap-2 group"
+                  >
+                    <div className="min-w-0 flex-1">
+                      <div className="font-bold text-slate-900 text-xs sm:text-sm truncate group-hover:text-blue-600 transition-colors">
+                        {p.name}
+                      </div>
+                      <div className="text-[0.72rem] text-slate-500 font-mono mt-0.5 flex items-center gap-2 flex-wrap">
+                        <span>{p.barcode}</span>
+                        {p.internalCode && (
+                          <span className="bg-slate-200/80 text-slate-700 px-1.5 py-0.2 rounded font-semibold text-[0.65rem]">
+                            #{p.internalCode}
+                          </span>
+                        )}
+                      </div>
+                    </div>
+                    <div className="flex items-center gap-2 shrink-0">
+                      {tracked ? (
+                        <span className="text-[0.68rem] font-bold bg-amber-100 text-amber-800 px-2.5 py-1 rounded-full">
+                          HSD: {formatDate(tracked.exp_date)}
+                        </span>
+                      ) : (
+                        <span className="text-[0.68rem] font-bold bg-blue-50 text-blue-600 px-2.5 py-1 rounded-full flex items-center gap-1">
+                          <Plus size={12} /> Thêm HSD
+                        </span>
+                      )}
+                      <ChevronRight size={16} className="text-slate-400 group-hover:translate-x-0.5 transition-transform" />
+                    </div>
+                  </div>
+                );
+              })
+            )}
+          </div>
+        )}
+      </div>
+
+      <div className="pb-28 space-y-3.5">
+        {loadingExpiries && expiryItems.length === 0 ? (
+          <div className="text-center py-12 text-slate-400 text-xs flex items-center justify-center gap-2">
+            <Loader2 size={18} className="animate-spin text-blue-600" />
+            <span>Đang đồng bộ dữ liệu hạn sử dụng...</span>
+          </div>
+        ) : expiryItems.length === 0 ? (
+          <EmptyState icon={<Clock size={48} />} message="Chưa có sản phẩm nào được lưu hạn sử dụng" />
+        ) : (
+          expiryItems.map((item) => {
+            const { product, status } = item;
+            return (
+              <motion.div 
+                key={item.barcode}
+                initial={{ opacity: 0, y: 10 }} 
+                animate={{ opacity: 1, y: 0 }} 
+                onClick={() => handleSelectProductForRecord(product)}
+                className={`p-4 sm:p-5 rounded-[1.5rem] bg-gradient-to-br ${status.cls} text-white shadow-lg relative overflow-hidden cursor-pointer active:scale-[0.99] transition-all`}
+              >
+                <div className="flex justify-between items-start gap-2">
+                  <div className="flex-1 min-w-0">
+                    <div className="text-xs sm:text-sm font-extrabold tracking-wide mb-1 flex items-center gap-1.5 flex-wrap">
+                      <span className="truncate">{product.name}</span>
+                      <span className="opacity-85 font-mono text-[0.72rem]">({item.barcode})</span>
+                      {product.internalCode && (
+                        <span className="bg-white/20 px-1.5 py-0.2 rounded text-[0.68rem] font-mono">#{product.internalCode}</span>
+                      )}
+                    </div>
+                    <div className="text-xl sm:text-2xl font-black mb-1 font-mono">
+                      Hủy: {formatDate(item.destructionDate)}
+                    </div>
+                    <div className="text-[0.82rem] font-medium opacity-95 flex flex-wrap items-center gap-x-2 gap-y-0.5">
+                      <span>HSD: {formatDate(item.exp_date)}</span>
+                      <span>•</span>
+                      <span>Hủy trước: {item.destroy_days} ngày</span>
+                      <span>•</span>
+                      <span className="font-bold underline decoration-white/40">{status.txt}</span>
+                    </div>
+                  </div>
+
+                  <button 
+                    type="button"
+                    onClick={(e) => handleDeleteRecord(item, e)}
+                    className="p-2 bg-white/20 hover:bg-white/30 rounded-xl transition-all active:scale-95 text-white shrink-0 cursor-pointer border-0"
+                    title="Xóa hạn sử dụng này"
+                  >
+                    <Trash2 size={18} />
+                  </button>
+                </div>
+              </motion.div>
+            );
+          })
         )}
       </div>
 
       <AnimatePresence>
-        {isAddRecordModalOpen && (
-          <div className="fixed inset-0 z-50 flex items-end justify-center sm:items-center">
+        {selectedProduct && (
+          <div className="fixed inset-0 z-50 flex items-end justify-center sm:items-center p-0 sm:p-4">
             <motion.div 
               initial={{ opacity: 0 }} 
               animate={{ opacity: 1 }} 
               exit={{ opacity: 0 }} 
-              className="absolute inset-0 bg-slate-900/40 backdrop-blur-sm"
-              onClick={() => setIsAddRecordModalOpen(false)}
+              className="absolute inset-0 bg-slate-900/40 backdrop-blur-xs"
+              onClick={() => setSelectedProduct(null)}
             />
             <motion.div 
               initial={{ y: '100%' }} 
               animate={{ y: 0 }} 
               exit={{ y: '100%' }}
               transition={{ type: "spring", damping: 25, stiffness: 200 }}
-              className="relative w-full max-w-md bg-white rounded-t-[2rem] sm:rounded-[2rem] p-6 max-h-[90vh] flex flex-col shadow-2xl z-10"
+              className="relative w-full max-w-md bg-white/95 backdrop-blur-md rounded-t-[2.5rem] sm:rounded-3xl p-6 sm:p-8 max-h-[90vh] flex flex-col shadow-apple-lg border-0 z-10"
             >
-              <div className="flex justify-between items-center mb-5 shrink-0">
-                <h2 className="text-xl font-bold text-slate-800 flex items-center gap-2">
-                  <Plus className="text-blue-600" size={24} /> Thêm HSD Mới
+              <div className="flex justify-between items-center mb-4 shrink-0">
+                <h2 className="text-lg sm:text-xl font-bold text-slate-900 flex items-center gap-2">
+                  <Calendar className="text-blue-600" size={22} /> Lưu Hạn Sử Dụng
                 </h2>
                 <button 
-                  onClick={() => setIsAddRecordModalOpen(false)}
-                  className="p-2 text-slate-400 hover:text-slate-600 rounded-full hover:bg-slate-100"
+                  type="button"
+                  onClick={() => setSelectedProduct(null)}
+                  className="p-2 text-slate-400 hover:text-slate-600 rounded-full hover:bg-slate-100 transition-colors border-0 cursor-pointer"
                 >
                   <X size={20} />
                 </button>
               </div>
 
-              <div className="flex-1 overflow-y-auto space-y-4 pb-2">
-                {!selectedProduct ? (
-                  <>
-                    <InputGroup label="Tìm Sản Phẩm *">
-                      <input 
-                        type="text" 
-                        placeholder="Nhập mã vạch hoặc tên..." 
-                        className={inputClass} 
-                        value={recordSearch} 
-                        onChange={e => setRecordSearch(e.target.value)} 
-                      />
-                    </InputGroup>
-                    
-                    <div className="max-h-[300px] overflow-y-auto space-y-2 mt-2">
-                      {filteredProductsForRecord.length === 0 ? (
-                         <div className="text-center py-4 text-slate-400 text-sm bg-slate-50 rounded-xl">
-                           {recordSearch ? 'Không tìm thấy sản phẩm' : 'Nhập để tìm kiếm'}
-                         </div>
-                      ) : (
-                        filteredProductsForRecord.slice(0, 20).map(p => (
-                          <div 
-                            key={p.id}
-                            onClick={() => handleSelectProductForRecord(p)}
-                            className="p-3 bg-white border border-slate-200 rounded-xl hover:bg-blue-50 hover:border-blue-200 cursor-pointer transition-all flex justify-between items-center"
-                          >
-                            <div>
-                              <div className="font-bold text-slate-800 text-[0.9rem]">{p.name}</div>
-                              <div className="text-[0.7rem] text-slate-500 font-mono">{p.barcode}</div>
-                            </div>
-                            <ChevronRight size={18} className="text-slate-400" />
-                          </div>
-                        ))
+              <div className="space-y-4">
+                <div className="p-4 bg-blue-50/80 rounded-2xl flex justify-between items-center border-0 shadow-apple-soft">
+                  <div className="min-w-0 pr-2">
+                    <div className="text-[0.7rem] text-blue-700 font-bold uppercase tracking-wider mb-0.5">Sản phẩm từ kho</div>
+                    <div className="font-bold text-slate-900 text-sm sm:text-base truncate">{selectedProduct.name}</div>
+                    <div className="text-xs text-slate-500 font-mono mt-0.5 flex items-center gap-2">
+                      <span>{selectedProduct.barcode}</span>
+                      {selectedProduct.internalCode && (
+                        <span className="bg-blue-100 text-blue-700 px-1.5 py-0.2 rounded font-semibold text-[0.68rem]">
+                          #{selectedProduct.internalCode}
+                        </span>
                       )}
                     </div>
-                  </>
-                ) : (
-                  <>
-                    <div className="p-3 bg-blue-50 border border-blue-100 rounded-xl mb-2 flex justify-between items-center">
-                      <div>
-                        <div className="text-[0.75rem] text-blue-600 font-bold mb-0.5">Đang chọn:</div>
-                        <div className="font-bold text-slate-800">{selectedProduct.name}</div>
-                        <div className="text-[0.7rem] text-slate-500 font-mono mt-0.5">{selectedProduct.barcode}</div>
-                      </div>
-                      <button 
-                        onClick={() => setSelectedProduct(null)}
-                        className="text-[0.75rem] font-bold text-blue-600 hover:bg-blue-100 px-2 py-1 rounded-lg"
-                      >
-                        Đổi
-                      </button>
-                    </div>
+                  </div>
+                </div>
 
-                    <div className="grid grid-cols-2 gap-3">
-                      <InputGroup label="Hạn sử dụng *">
-                        <input 
-                          type="date" 
-                          className={inputClass} 
-                          value={newRecordForm.expDate} 
-                          onChange={e => {
-                            const val = e.target.value;
-                            const calc = calculateDestructionDate(val, newRecordForm.destroyDays === '' || isNaN(parseInt(newRecordForm.destroyDays)) ? 0 : parseInt(newRecordForm.destroyDays));
-                            setNewRecordForm({ ...newRecordForm, expDate: val, destructionDate: calc });
-                          }} 
-                        />
-                      </InputGroup>
-                      
-                      <InputGroup label="Ngày hủy">
-                        <input 
-                          type="date" 
-                          className={inputClass} 
-                          value={newRecordForm.destructionDate} 
-                          onChange={e => setNewRecordForm({ ...newRecordForm, destructionDate: e.target.value })} 
-                        />
-                      </InputGroup>
-                    </div>
+                <div className="grid grid-cols-2 gap-3">
+                  <InputGroup label="Hạn sử dụng (HSD) *">
+                    <input 
+                      type="date" 
+                      className={inputClass} 
+                      value={newRecordForm.expDate} 
+                      onChange={e => {
+                        const val = e.target.value;
+                        const days = newRecordForm.destroyDays === '' || isNaN(parseInt(newRecordForm.destroyDays)) ? 0 : parseInt(newRecordForm.destroyDays);
+                        const calc = calculateDestructionDate(val, days);
+                        setNewRecordForm({ ...newRecordForm, expDate: val, destructionDate: calc });
+                      }} 
+                    />
+                  </InputGroup>
+                  
+                  <InputGroup label="Số ngày hủy trước">
+                    <input 
+                      type="number" 
+                      inputMode="numeric" 
+                      min="0"
+                      placeholder="VD: 15" 
+                      className={inputClass} 
+                      value={newRecordForm.destroyDays} 
+                      onChange={e => {
+                        const daysStr = e.target.value;
+                        const days = daysStr === '' || isNaN(parseInt(daysStr)) ? 0 : parseInt(daysStr);
+                        const calc = calculateDestructionDate(newRecordForm.expDate, days);
+                        setNewRecordForm({ ...newRecordForm, destroyDays: daysStr, destructionDate: calc });
+                      }} 
+                    />
+                  </InputGroup>
+                </div>
 
-                    <InputGroup label="Báo trước (Ngày)">
-                      <input 
-                        type="number" 
-                        inputMode="numeric"
-                        placeholder="Số ngày báo trước" 
-                        className={inputClass} 
-                        value={newRecordForm.destroyDays} 
-                        onChange={e => {
-                          const days = e.target.value;
-                          const calc = calculateDestructionDate(newRecordForm.expDate, days === '' || isNaN(parseInt(days)) ? 0 : parseInt(days));
-                          setNewRecordForm({ ...newRecordForm, destroyDays: days, destructionDate: calc });
-                        }} 
-                      />
-                    </InputGroup>
-
-                    <div className="grid grid-cols-2 gap-3">
-                      <InputGroup label="Số lượng">
-                        <input 
-                          type="number" 
-                          inputMode="numeric"
-                          placeholder="SL lô này" 
-                          className={inputClass} 
-                          value={newRecordForm.quantity} 
-                          onChange={e => setNewRecordForm({ ...newRecordForm, quantity: e.target.value })} 
-                        />
-                      </InputGroup>
-                      
-                      <InputGroup label="Ghi chú">
-                        <input 
-                          type="text" 
-                          placeholder="VD: Kệ số 3" 
-                          className={inputClass} 
-                          value={newRecordForm.note} 
-                          onChange={e => setNewRecordForm({ ...newRecordForm, note: e.target.value })} 
-                        />
-                      </InputGroup>
-                    </div>
-
-                    <button 
-                      onClick={handleSaveNewRecord}
-                      className="w-full mt-2 py-3.5 bg-blue-600 hover:bg-blue-700 text-white rounded-xl font-bold text-[1rem] shadow-lg shadow-blue-500/30 transition-all active:scale-95"
-                    >
-                      Lưu Record
-                    </button>
-                  </>
+                {newRecordForm.destructionDate && (
+                  <div className="p-3.5 bg-rose-50/90 rounded-2xl text-xs font-semibold text-rose-800 flex items-center justify-between border-0 shadow-apple-soft">
+                    <span>Ngày phải hủy:</span>
+                    <span className="font-mono font-bold text-rose-600 text-sm">
+                      {formatDate(newRecordForm.destructionDate)}
+                    </span>
+                  </div>
                 )}
+
+                <div className="pt-2 flex gap-3">
+                  <button 
+                    type="button" 
+                    onClick={() => setSelectedProduct(null)} 
+                    className="flex-1 py-3.5 bg-slate-100 hover:bg-slate-200 text-slate-700 font-semibold rounded-full transition-all border-0 cursor-pointer"
+                  >
+                    Hủy
+                  </button>
+                  <button 
+                    type="button"
+                    onClick={handleSaveNewRecord}
+                    disabled={isSavingNewRecord}
+                    className="flex-1 py-3.5 bg-blue-600 hover:bg-blue-700 disabled:opacity-50 text-white font-semibold rounded-full shadow-apple-soft transition-all border-0 cursor-pointer flex items-center justify-center gap-2"
+                  >
+                    {isSavingNewRecord ? 'Đang lưu...' : 'Lưu hạn sử dụng'}
+                  </button>
+                </div>
               </div>
             </motion.div>
           </div>
         )}
       </AnimatePresence>
 
+      <BarcodeScannerModal
+        isOpen={isScannerModalOpen}
+        onClose={() => setIsScannerModalOpen(false)}
+        onProductFound={(prod) => {
+          setIsScannerModalOpen(false);
+          handleSelectProductForRecord(prod);
+        }}
+      />
     </motion.div>
   );
 };
@@ -1271,7 +1301,7 @@ export const PriceScreen: React.FC<{
     <motion.div initial={{ opacity: 0, x: 20 }} animate={{ opacity: 1, x: 0 }} exit={{ opacity: 0, x: -20 }}>
       <Header title="CHECK GIÁ" onBack={onBack} />
       <div className="mb-6 flex gap-2">
-        <div className="relative flex-1 shadow-sm rounded-[1.2rem] overflow-hidden bg-white border border-slate-200 focus-within:border-emerald-500 focus-within:ring-4 focus-within:ring-emerald-500/10 transition-all">
+        <div className="relative flex-1 shadow-sm rounded-[1.2rem] overflow-hidden bg-white border-0 shadow-apple-soft focus-within:border-emerald-500 focus-within:ring-4 focus-within:ring-emerald-500/10 transition-all">
           <Search className="absolute left-4 top-1/2 -translate-y-1/2 text-slate-400" size={20} />
           <input
             type="text"
@@ -1306,7 +1336,7 @@ export const PriceScreen: React.FC<{
           <EmptyState icon={<Search size={48} />} message={search ? "Không tìm thấy sản phẩm" : "Chưa có sản phẩm nào"} />
         ) : (
           filteredProducts.map(p => (
-            <div key={p.id} className="bg-white border border-slate-100 rounded-2xl p-4 flex justify-between items-center shadow-sm">
+            <div key={p.id} className="bg-white/90 backdrop-blur-md rounded-3xl p-4 flex justify-between items-center shadow-apple border-0">
               <div>
                 <h3 className="font-bold text-slate-800 text-[0.95rem]">{p.name}</h3>
                 <div className="flex items-center gap-2 mt-1">
@@ -1333,24 +1363,43 @@ export const DataScreen: React.FC<{
   onBack: () => void; 
   products: Product[]; 
   onImport?: (data: string) => void;
-}> = ({ onBack, products }) => {
-  const [activeTab, setActiveTab] = useState<'sell' | 'order' | 'destruction'>('sell');
+  currentUser?: { username: string; name: string; role: 'admin' | 'user' } | null;
+}> = ({ onBack, products, currentUser }) => {
+  const [isUnlocked, setIsUnlocked] = useState<boolean>(() => {
+    if (!currentUser || currentUser.role === 'admin') return true;
+    return sessionStorage.getItem('data_access_unlocked') === '1203';
+  });
+  const [pinInput, setPinInput] = useState('');
+  const [pinError, setPinError] = useState('');
+
+  const [activeTab, setActiveTab] = useState<'sell' | 'order'>('sell');
   const [consumables, setConsumables] = useState<ConsumableItem[]>([]);
-  const [destructionItems, setDestructionItems] = useState<DestructionItem[]>([]);
-  const [isImportingDestruction, setIsImportingDestruction] = useState(false);
-  const [importProgress, setImportProgress] = useState<string | null>(null);
-  const [totalProductsCount, setTotalProductsCount] = useState<number | null>(null);
-  const [totalProductsPrice, setTotalProductsPrice] = useState<number | null>(null);
+  const [importState, setImportState] = useState<{ done: number; total: number; title: string } | null>(null);
+  
+  const [totalProductsCount, setTotalProductsCount] = useState<number | null>(() => {
+    const c = localStorage.getItem('cached_products_count');
+    return c ? Number(c) : null;
+  });
+  const [totalProductsPrice, setTotalProductsPrice] = useState<number | null>(() => {
+    const p = localStorage.getItem('cached_products_price');
+    return p ? Number(p) : null;
+  });
 
   useEffect(() => {
     let active = true;
     const fetchStats = async () => {
       try {
-        const coll = collection(db, 'products');
-        const countSnap = await getCountFromServer(coll);
-        if (active) setTotalProductsCount(countSnap.data().count);
-        const aggSnap = await getAggregateFromServer(coll, { totalPrice: sum('price') });
-        if (active) setTotalProductsPrice(aggSnap.data().totalPrice);
+        const { count, error } = await supabase.from('products').select('*', { count: 'exact', head: true });
+        if (!error && typeof count === 'number' && active) {
+          setTotalProductsCount(count);
+          localStorage.setItem('cached_products_count', String(count));
+        }
+        const { data: priceData } = await supabase.from('products').select('price').limit(10000);
+        if (priceData && active) {
+          const sp = priceData.reduce((acc: number, row: any) => acc + (Number(row.price) || 0), 0);
+          setTotalProductsPrice(sp);
+          localStorage.setItem('cached_products_price', String(sp));
+        }
       } catch (e) {
         console.warn('Stats fetch note:', e);
       }
@@ -1363,12 +1412,8 @@ export const DataScreen: React.FC<{
     const unsubConsumables = subscribeConsumables((items) => {
       setConsumables(items);
     });
-    const unsubDestruction = subscribeDestructionItems((items) => {
-      setDestructionItems(items);
-    });
     return () => {
       unsubConsumables();
-      unsubDestruction();
     };
   }, []);
 
@@ -1419,48 +1464,158 @@ export const DataScreen: React.FC<{
     link.click();
   };
 
+  const extractProductItems = (rawData: any[][]): Omit<Product, 'id'>[] => {
+    if (rawData.length <= 1) return [];
+
+    let headerRowIndex = -1;
+    let headers: string[] = [];
+    for (let r = 0; r < Math.min(10, rawData.length); r++) {
+      const row = rawData[r];
+      if (Array.isArray(row)) {
+        const rowStr = row.map(cell => String(cell || '').trim().toLowerCase()).join(' ');
+        if (rowStr.includes('barcode') || rowStr.includes('mã vạch') || rowStr.includes('tên') || rowStr.includes('giá') || rowStr.includes('hsd') || rowStr.includes('nội bộ')) {
+          headerRowIndex = r;
+          headers = row.map(cell => String(cell || '').trim().toLowerCase());
+          break;
+        }
+      }
+    }
+
+    const findColIdx = (keywords: string[]) => {
+      return headers.findIndex(h => keywords.some(k => h.includes(k)));
+    };
+
+    const nameIdx = headerRowIndex >= 0 ? findColIdx(['tên', 'ten', 'sản phẩm', 'san pham', 'mặt hàng', 'name']) : 0;
+    const barcodeIdx = headerRowIndex >= 0 ? findColIdx(['barcode', 'mã vạch', 'ma vach']) : 1;
+    const internalCodeIdx = headerRowIndex >= 0 ? findColIdx(['nội bộ', 'noi bo', 'mã nb', 'mã sp', 'sku', 'code', 'mã hàng']) : 2;
+    const destroyDaysIdx = headerRowIndex >= 0 ? findColIdx(['hủy trước', 'huy truoc', 'ngày trước', 'destroy']) : 3;
+    const expDateIdx = headerRowIndex >= 0 ? findColIdx(['hsd', 'hạn dùng', 'han dung', 'hạn sử dụng', 'exp']) : 4;
+    const destructionDateIdx = headerRowIndex >= 0 ? findColIdx(['ngày hủy', 'ngay huy']) : 5;
+    const priceIdx = headerRowIndex >= 0 ? findColIdx(['giá', 'gia', 'đơn giá', 'don gia', 'price']) : 6;
+    const qtyIdx = headerRowIndex >= 0 ? findColIdx(['số lượng', 'so luong', 'sl', 'qty']) : 7;
+    const noteIdx = headerRowIndex >= 0 ? findColIdx(['ghi chú', 'ghi chu', 'note']) : 8;
+
+    const startRow = headerRowIndex >= 0 ? headerRowIndex + 1 : 1;
+    const items: Omit<Product, 'id'>[] = [];
+
+    for (let i = startRow; i < rawData.length; i++) {
+      const row = rawData[i];
+      if (!Array.isArray(row) || row.every(c => c === '' || c === undefined || c === null)) continue;
+
+      let nameVal = nameIdx >= 0 ? String(row[nameIdx] || '').trim() : '';
+      let barcodeVal = barcodeIdx >= 0 ? String(row[barcodeIdx] || '').trim() : '';
+      let internalCodeVal = internalCodeIdx >= 0 ? String(row[internalCodeIdx] || '').trim() : '';
+      let destroyDaysVal = destroyDaysIdx >= 0 ? parseInt(String(row[destroyDaysIdx]).replace(/\D/g, ''), 10) : 0;
+      let expDateVal = expDateIdx >= 0 ? String(row[expDateIdx] || '').trim() : '';
+      let destructionDateVal = destructionDateIdx >= 0 ? String(row[destructionDateIdx] || '').trim() : '';
+      let priceVal = priceIdx >= 0 ? parseInt(String(row[priceIdx]).replace(/\D/g, ''), 10) : 0;
+      let qtyVal = qtyIdx >= 0 ? parseInt(String(row[qtyIdx]).replace(/\D/g, ''), 10) : undefined;
+      let noteVal = noteIdx >= 0 ? String(row[noteIdx] || '').trim() : undefined;
+
+      if (!barcodeVal && internalCodeVal) {
+        barcodeVal = internalCodeVal;
+      }
+      if (!internalCodeVal && barcodeVal) {
+        internalCodeVal = barcodeVal;
+      }
+
+      if (nameVal || barcodeVal) {
+        if (!nameVal) nameVal = 'Mặt hàng ' + (barcodeVal || internalCodeVal || i);
+        if (!barcodeVal) barcodeVal = 'SP' + (internalCodeVal || i);
+
+        const records: ExpiryRecord[] = [];
+        const hasValidExp = isValidRealExpiryDate(expDateVal);
+        const hasValidDestruction = isValidRealExpiryDate(destructionDateVal);
+
+        if (hasValidExp || hasValidDestruction) {
+          const dDate = hasValidDestruction 
+            ? destructionDateVal 
+            : (hasValidExp ? calculateDestructionDate(expDateVal, isNaN(destroyDaysVal) ? 0 : destroyDaysVal) : '');
+          if (isValidRealExpiryDate(dDate)) {
+            records.push({
+              id: 'rec-' + Date.now() + '-' + i,
+              expDate: expDateVal || dDate,
+              destructionDate: dDate,
+              quantity: isNaN(Number(qtyVal)) ? undefined : qtyVal,
+              note: noteVal,
+              createdAt: new Date().toISOString()
+            });
+          }
+        }
+
+        const validEarliestDestruction = records.length > 0 ? records[0].destructionDate : '';
+
+        items.push({
+          name: nameVal,
+          barcode: barcodeVal,
+          internalCode: internalCodeVal || undefined,
+          destroyDaysBeforeExpiry: isNaN(destroyDaysVal) ? 0 : destroyDaysVal,
+          price: isNaN(priceVal) ? 0 : priceVal,
+          destructionDate: validEarliestDestruction,
+          expiryRecords: records
+        });
+      }
+    }
+
+    return items;
+  };
+
   const handleImportSell = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (!file) return;
     try {
-      setImportProgress('Đang đọc file...');
-      const text = await file.text();
-      const rows = parseCSVRows(text).slice(1);
-      const items: Omit<Product, 'id'>[] = [];
-      for (const parts of rows) {
-        if (parts.length >= 2 && (parts[0] || parts[1])) {
-          items.push({
-            name: parts[0] || '',
-            barcode: parts[1] || '',
-            internalCode: parts[2] || undefined,
-            destroyDaysBeforeExpiry: parseInt(parts[3]) || 0,
-            price: parseInt(parts[6]) || 0
-          });
-        }
+      const fileNameLower = file.name.toLowerCase();
+      let gridData: any[][] = [];
+      if (fileNameLower.endsWith('.csv') || fileNameLower.endsWith('.txt')) {
+        const text = await file.text();
+        gridData = parseCSVRows(text);
+      } else {
+        const arrayBuffer = await file.arrayBuffer();
+        const workbook = XLSX.read(arrayBuffer, { type: 'array' });
+        const firstSheetName = workbook.SheetNames[0];
+        const worksheet = workbook.Sheets[firstSheetName];
+        gridData = XLSX.utils.sheet_to_json(worksheet, { header: 1, defval: '' });
       }
+
+      const items = extractProductItems(gridData);
       if (items.length === 0) {
         alert('File không có dữ liệu hợp lệ!');
         return;
       }
-      setImportProgress(`Đang nạp 0/${items.length}...`);
+
+      setImportState({ done: 0, total: items.length, title: 'Đang nạp Item Bán...' });
       const count = await addProductsBulk(items, 'shared', (done, total) => {
-        setImportProgress(`Đang nạp ${done}/${total}...`);
+        setImportState({ done, total, title: 'Đang nạp Item Bán...' });
       });
+
+      const addedPrice = items.reduce((acc, it) => acc + (it.price || 0), 0);
+      setTotalProductsCount(count);
+      localStorage.setItem('cached_products_count', String(count));
+      setTotalProductsPrice(addedPrice);
+      localStorage.setItem('cached_products_price', String(addedPrice));
+
       alert(`Đã import thành công ${count} Item Bán!`);
+
       try {
-        const coll = collection(db, 'products');
-        const countSnap = await getCountFromServer(coll);
-        setTotalProductsCount(countSnap.data().count);
-        const aggSnap = await getAggregateFromServer(coll, { totalPrice: sum('price') });
-        setTotalProductsPrice(aggSnap.data().totalPrice);
+        const { count: serverCount } = await supabase.from('products').select('*', { count: 'exact', head: true });
+        if (typeof serverCount === 'number') {
+          setTotalProductsCount(serverCount);
+          localStorage.setItem('cached_products_count', String(serverCount));
+        }
+        const { data: priceData } = await supabase.from('products').select('price').limit(10000);
+        if (priceData) {
+          const serverPrice = priceData.reduce((acc: number, row: any) => acc + (Number(row.price) || 0), 0);
+          setTotalProductsPrice(serverPrice);
+          localStorage.setItem('cached_products_price', String(serverPrice));
+        }
       } catch (err) {
-        console.warn('Update stats error:', err);
+        console.warn('Update stats note:', err);
       }
     } catch (err: any) {
       console.error(err);
       alert('Có lỗi khi import: ' + (err?.message || 'Thất bại'));
     } finally {
-      setImportProgress(null);
+      setImportState(null);
       e.target.value = '';
     }
   };
@@ -1469,48 +1624,72 @@ export const DataScreen: React.FC<{
     const file = e.target.files?.[0];
     if (!file) return;
     try {
-      setImportProgress('Đang đọc file...');
-      const text = await file.text();
-      const rows = parseCSVRows(text).slice(1);
+      const fileNameLower = file.name.toLowerCase();
+      let gridData: any[][] = [];
+      if (fileNameLower.endsWith('.csv') || fileNameLower.endsWith('.txt')) {
+        const text = await file.text();
+        gridData = parseCSVRows(text);
+      } else {
+        const arrayBuffer = await file.arrayBuffer();
+        const workbook = XLSX.read(arrayBuffer, { type: 'array' });
+        const firstSheetName = workbook.SheetNames[0];
+        const worksheet = workbook.Sheets[firstSheetName];
+        gridData = XLSX.utils.sheet_to_json(worksheet, { header: 1, defval: '' });
+      }
+
+      let headerRowIndex = -1;
+      let headers: string[] = [];
+      for (let r = 0; r < Math.min(10, gridData.length); r++) {
+        const row = gridData[r];
+        if (Array.isArray(row)) {
+          const rowStr = row.map(cell => String(cell || '').trim().toLowerCase()).join(' ');
+          if (rowStr.includes('sku') || rowStr.includes('mã') || rowStr.includes('tên') || rowStr.includes('nhà cung cấp') || rowStr.includes('supplier')) {
+            headerRowIndex = r;
+            headers = row.map(cell => String(cell || '').trim().toLowerCase());
+            break;
+          }
+        }
+      }
+
+      const findCol = (kw: string[]) => headers.findIndex(h => kw.some(k => h.includes(k)));
+      const skuIdx = headerRowIndex >= 0 ? findCol(['sku', 'mã', 'ma']) : 0;
+      const nameIdx = headerRowIndex >= 0 ? findCol(['tên', 'ten', 'sản phẩm', 'san pham', 'hàng']) : 1;
+      const supIdx = headerRowIndex >= 0 ? findCol(['cung cấp', 'cung cap', 'supplier', 'chính sách']) : 2;
+
+      const start = headerRowIndex >= 0 ? headerRowIndex + 1 : 1;
       const items: Omit<ConsumableItem, 'id'>[] = [];
-      for (const parts of rows) {
-        if (parts.length >= 2 && (parts[0] || parts[1])) {
+      for (let i = start; i < gridData.length; i++) {
+        const parts = gridData[i];
+        if (!Array.isArray(parts)) continue;
+        const s = skuIdx >= 0 ? String(parts[skuIdx] || '').trim() : '';
+        const n = nameIdx >= 0 ? String(parts[nameIdx] || '').trim() : '';
+        const sup = supIdx >= 0 ? String(parts[supIdx] || '').trim() : undefined;
+        if (s || n) {
           items.push({
-            sku: parts[0] || '',
-            name: parts[1] || '',
-            supplier: parts[2] || undefined
+            sku: s || ('SKU' + i),
+            name: n || ('Vật tư ' + (s || i)),
+            supplier: sup || undefined
           });
         }
       }
+
       if (items.length === 0) {
         alert('File không có dữ liệu hợp lệ!');
         return;
       }
-      setImportProgress(`Đang nạp 0/${items.length}...`);
+      setImportState({ done: 0, total: items.length, title: 'Đang nạp Item Đặt Hàng...' });
       const count = await addConsumablesBulk(items, (done, total) => {
-        setImportProgress(`Đang nạp ${done}/${total}...`);
+        setImportState({ done, total, title: 'Đang nạp Item Đặt Hàng...' });
       });
       alert(`Đã import thành công ${count} Item Đặt Hàng!`);
     } catch (err: any) {
       console.error(err);
       alert('Có lỗi khi import: ' + (err?.message || 'Thất bại'));
     } finally {
-      setImportProgress(null);
+      setImportState(null);
       e.target.value = '';
     }
   };
-
-  const [showCsvModal, setShowCsvModal] = useState(false);
-  const [copiedCsvSample, setCopiedCsvSample] = useState(false);
-
-  // Mẫu CSV chuẩn để người dùng tham khảo hoặc sao chép
-  const SAMPLE_CSV_CONTENT = `STT,Mã nội bộ,Barcode,Tên hàng,Số lượng,Ghi chú
-1,100234,8934567890123,Sữa tươi Tiệt trùng Vinamilk 100% Có đường 1L,3,Hộp móp rò rỉ nắp
-2,100456,8935001712345,Sữa chua men sống Probi chai 65ml (lốc 5),2,Hết hạn sử dụng
-3,102389,8934822001124,Bánh mì tươi chà bông Kinh Đô 50g,5,Date cận ngày
-4,105670,8934588012111,Xúc xích tiệt trùng Vissan Heo dinh dưỡng 4 cây 160g,4,Bao bì rách
-5,108991,8936036010022,Nước ngọt Coca-Cola Sleek lon 320ml,6,Vỏ lon móp méo
-6,110245,8934563148112,Mì Omachi sườn hầm ngũ quả gói 80g,10,Gói bị xì hơi`;
 
   // Hàm phân tích file CSV (hỗ trợ phân cách bằng phẩy hoặc chấm phẩy, hỗ trợ dấu ngoặc kép và tiếng Việt UTF-8)
   const parseCSVRows = (text: string): string[][] => {
@@ -1566,169 +1745,6 @@ export const DataScreen: React.FC<{
     return lines;
   };
 
-  // Trích xuất các mặt hàng từ bảng dữ liệu lưới (CSV hoặc Excel)
-  const extractDestructionItems = (rawData: any[][]): Omit<DestructionItem, 'id'>[] => {
-    if (rawData.length <= 1) return [];
-
-    // Tìm dòng tiêu đề
-    let headerRowIndex = 0;
-    let headers: string[] = [];
-    for (let r = 0; r < Math.min(10, rawData.length); r++) {
-      const row = rawData[r];
-      if (Array.isArray(row)) {
-        const rowStr = row.map(cell => String(cell || '').trim().toLowerCase()).join(' ');
-        if (rowStr.includes('barcode') || rowStr.includes('mã') || rowStr.includes('tên') || rowStr.includes('stt')) {
-          headerRowIndex = r;
-          headers = row.map(cell => String(cell || '').trim().toLowerCase());
-          break;
-        }
-      }
-    }
-
-    if (headers.length === 0) {
-      headers = rawData[0].map(cell => String(cell || '').trim().toLowerCase());
-    }
-
-    const findColIdx = (keywords: string[]) => {
-      return headers.findIndex(h => keywords.some(k => h.includes(k)));
-    };
-
-    const sttIdx = findColIdx(['stt', 'số thứ tự', 'no', 'tt']);
-    const internalCodeIdx = findColIdx(['nội bộ', 'noi bo', 'mã nb', 'mã sp', 'sku']);
-    const barcodeIdx = findColIdx(['barcode', 'mã vạch', 'ma vach', 'mã']);
-    const nameIdx = findColIdx(['tên', 'ten', 'sản phẩm', 'san pham', 'mặt hàng']);
-    const qtyIdx = findColIdx(['số lượng', 'so luong', 'sl', 'qty']);
-    const noteIdx = findColIdx(['ghi chú', 'ghi chu', 'note', 'lý do', 'ly do']);
-
-    const parsedItems: Omit<DestructionItem, 'id'>[] = [];
-    const rows = rawData.slice(headerRowIndex + 1);
-
-    rows.forEach((row, rIdx) => {
-      if (!Array.isArray(row) || row.every(c => c === '' || c === undefined || c === null)) return;
-
-      let sttVal: any = sttIdx >= 0 ? row[sttIdx] : (parsedItems.length + 1);
-      if (sttVal === '' || sttVal === undefined) sttVal = parsedItems.length + 1;
-
-      let nameVal = nameIdx >= 0 ? String(row[nameIdx] || '').trim() : '';
-      let barcodeVal = barcodeIdx >= 0 ? String(row[barcodeIdx] || '').trim() : '';
-      let internalCodeVal = internalCodeIdx >= 0 ? String(row[internalCodeIdx] || '').trim() : '';
-      let qtyVal = qtyIdx >= 0 ? parseInt(String(row[qtyIdx]).replace(/\D/g, ''), 10) : undefined;
-      let noteVal = noteIdx >= 0 ? String(row[noteIdx] || '').trim() : '';
-
-      if (!barcodeVal && internalCodeVal) {
-        barcodeVal = internalCodeVal;
-      }
-
-      if (nameVal || barcodeVal) {
-        if (!nameVal) nameVal = 'Mặt hàng #' + (internalCodeVal || barcodeVal);
-        if (!barcodeVal) barcodeVal = 'NB' + (internalCodeVal || (rIdx + 1));
-
-        parsedItems.push({
-          stt: sttVal,
-          name: nameVal,
-          barcode: barcodeVal,
-          internalCode: internalCodeVal || undefined,
-          quantity: isNaN(Number(qtyVal)) ? undefined : qtyVal,
-          note: noteVal || undefined
-        });
-      }
-    });
-
-    return parsedItems;
-  };
-
-  // Nạp file CSV (hoặc Excel nếu người dùng tải lên)
-  const handleImportDestructionFile = async (e: React.ChangeEvent<HTMLInputElement>) => {
-    const file = e.target.files?.[0];
-    if (!file) return;
-    setIsImportingDestruction(true);
-
-    try {
-      const fileNameLower = file.name.toLowerCase();
-      let gridData: any[][] = [];
-
-      if (fileNameLower.endsWith('.csv') || fileNameLower.endsWith('.txt')) {
-        // Đọc trực tiếp định dạng CSV với mã hóa UTF-8
-        const text = await file.text();
-        gridData = parseCSVRows(text);
-      } else {
-        // Nếu là file Excel (.xlsx, .xls)
-        const arrayBuffer = await file.arrayBuffer();
-        const workbook = XLSX.read(arrayBuffer, { type: 'array' });
-        const firstSheetName = workbook.SheetNames[0];
-        const worksheet = workbook.Sheets[firstSheetName];
-        gridData = XLSX.utils.sheet_to_json(worksheet, { header: 1, defval: '' });
-      }
-
-      if (gridData.length <= 1) {
-        alert('File không có dữ liệu!');
-        setIsImportingDestruction(false);
-        e.target.value = '';
-        return;
-      }
-
-      const parsedItems = extractDestructionItems(gridData);
-
-      if (parsedItems.length === 0) {
-        alert('Không đọc được dòng dữ liệu hợp lệ nào từ file. Vui lòng kiểm tra lại cấu trúc file CSV theo mẫu hướng dẫn!');
-      } else {
-        setImportProgress(`Đang nạp 0/${parsedItems.length}...`);
-        await saveDestructionBatchOnline(parsedItems, (done, total) => {
-          setImportProgress(`Đang nạp ${done}/${total}...`);
-        });
-        alert(`Đã nạp thành công ${parsedItems.length} mặt hàng vào Biên bản hủy hàng!`);
-      }
-    } catch (err: any) {
-      console.error('Import destruction error:', err);
-      alert('Có lỗi khi đọc file: ' + (err.message || 'Lỗi định dạng'));
-    } finally {
-      setIsImportingDestruction(false);
-      setImportProgress(null);
-      e.target.value = '';
-    }
-  };
-
-  // Xuất file CSV chuẩn UTF-8 có BOM
-  const handleExportDestructionCSV = () => {
-    if (destructionItems.length === 0) {
-      alert('Chưa có dữ liệu biên bản hủy để xuất!');
-      return;
-    }
-
-    let csvContent = 'STT,Mã nội bộ,Barcode,Tên hàng,Số lượng,Ghi chú\r\n';
-    destructionItems.forEach((item, idx) => {
-      const stt = item.stt ?? (idx + 1);
-      const internalCode = (item.internalCode || '').replace(/"/g, '""');
-      const barcode = (item.barcode || '').replace(/"/g, '""');
-      const name = (item.name || '').replace(/"/g, '""');
-      const qty = item.quantity ?? '';
-      const note = (item.note || '').replace(/"/g, '""');
-      csvContent += `"${stt}","${internalCode}","${barcode}","${name}","${qty}","${note}"\r\n`;
-    });
-
-    const blob = new Blob(['\uFEFF' + csvContent], { type: 'text/csv;charset=utf-8;' });
-    const link = document.createElement('a');
-    link.href = URL.createObjectURL(blob);
-    link.download = `Bien_Ban_Huy_Hang_${new Date().toISOString().split('T')[0]}.csv`;
-    link.click();
-  };
-
-  // Tải file mẫu CSV
-  const handleDownloadSampleDestructionCSV = () => {
-    const blob = new Blob(['\uFEFF' + SAMPLE_CSV_CONTENT], { type: 'text/csv;charset=utf-8;' });
-    const link = document.createElement('a');
-    link.href = URL.createObjectURL(blob);
-    link.download = 'Mau_File_Bien_Ban_Huy_Hang.csv';
-    link.click();
-  };
-
-  // Sao chép nội dung CSV mẫu vào clipboard
-  const handleCopySampleCSV = () => {
-    navigator.clipboard.writeText(SAMPLE_CSV_CONTENT);
-    setCopiedCsvSample(true);
-    setTimeout(() => setCopiedCsvSample(false), 2000);
-  };
-
   const handleClearSell = async () => {
     if (confirm('Bạn có chắc chắn muốn xóa toàn bộ CSDL Item Bán không?')) {
       await clearProductsCollection();
@@ -1741,83 +1757,138 @@ export const DataScreen: React.FC<{
     }
   };
 
-  const handleClearDestruction = async () => {
-    if (confirm('Bạn có chắc chắn muốn xóa toàn bộ dữ liệu Biên bản hủy hàng hiện tại không?')) {
-      await clearDestructionCollection();
-      alert('Đã xóa dữ liệu biên bản hủy.');
-    }
-  };
-
-  const handleResetDestructionToSample = async () => {
-    if (confirm('Khôi phục danh sách biên bản hủy về danh sách mẫu ban đầu?')) {
-      await saveDestructionBatchOnline(INITIAL_SAMPLE_DESTRUCTION_ITEMS);
-      alert('Đã khôi phục danh sách mẫu thành công!');
-    }
-  };
+  if (!isUnlocked) {
+    return (
+      <motion.div initial={{ opacity: 0, x: 20 }} animate={{ opacity: 1, x: 0 }} exit={{ opacity: 0, x: -20 }}>
+        <Header title="DỮ LIỆU HÀNG" onBack={onBack} />
+        <div className="max-w-md mx-auto bg-white/95 backdrop-blur-md rounded-3xl p-8 shadow-apple-lg border-0 text-center space-y-5 mt-8">
+          <div className="w-14 h-14 mx-auto rounded-full bg-blue-50 text-blue-600 flex items-center justify-center border-0">
+            <Lock size={26} />
+          </div>
+          <div>
+            <h3 className="text-xl font-bold text-slate-900">Khóa Quản Trị</h3>
+            <p className="text-xs text-slate-500 mt-1">Vui lòng nhập mã PIN quản trị viên để tiếp tục.</p>
+          </div>
+          <form onSubmit={(e) => {
+            e.preventDefault();
+            if (pinInput.trim() === '1203') {
+              sessionStorage.setItem('data_access_unlocked', '1203');
+              setIsUnlocked(true);
+            } else {
+              setPinError('Mật khẩu không đúng!');
+            }
+          }} className="space-y-4">
+            <input
+              type="password"
+              autoFocus
+              value={pinInput}
+              onChange={(e) => {
+                setPinInput(e.target.value);
+                if (pinError) setPinError('');
+              }}
+              placeholder="••••••••"
+              className="w-full px-5 py-4 bg-slate-100/80 border-0 rounded-2xl text-center text-xl font-mono tracking-widest text-slate-800 outline-none focus:bg-white focus:ring-2 focus:ring-blue-500/20 shadow-2xs"
+            />
+            {pinError && <p className="text-rose-500 text-xs font-semibold">{pinError}</p>}
+            <button
+              type="submit"
+              className="w-full py-3.5 bg-blue-600 hover:bg-blue-700 text-white font-semibold rounded-full text-sm shadow-apple-soft transition-all active:scale-95 cursor-pointer border-0"
+            >
+              Mở khóa
+            </button>
+          </form>
+        </div>
+      </motion.div>
+    );
+  }
 
   return (
     <motion.div initial={{ opacity: 0, x: 20 }} animate={{ opacity: 1, x: 0 }} exit={{ opacity: 0, x: -20 }}>
       <Header title="DỮ LIỆU HÀNG" onBack={onBack} />
       
-      {/* 3 Tabs phân chia rõ ràng */}
-      <div className="grid grid-cols-3 gap-1.5 pb-4">
+      {/* Segmented Control phong cách Apple Pill Bar */}
+      <div className="flex bg-white/95 backdrop-blur-md p-1.5 rounded-full shadow-apple-soft mb-6 border-0 gap-1.5">
         <button 
           onClick={() => setActiveTab('sell')}
-          className={`py-2.5 px-1 rounded-2xl font-bold text-xs transition-all shadow-sm border text-center truncate ${activeTab === 'sell' ? 'bg-indigo-600 text-white border-indigo-600' : 'bg-white text-slate-600 border-slate-200 hover:bg-slate-50'}`}
+          className={`flex-1 py-2.5 px-3 rounded-full font-semibold text-xs transition-all border-0 text-center truncate cursor-pointer ${
+            activeTab === 'sell' 
+              ? 'bg-blue-600 text-white shadow-apple-soft' 
+              : 'text-slate-600 hover:text-slate-900'
+          }`}
         >
           Item Bán Hàng
         </button>
         <button 
           onClick={() => setActiveTab('order')}
-          className={`py-2.5 px-1 rounded-2xl font-bold text-xs transition-all shadow-sm border text-center truncate ${activeTab === 'order' ? 'bg-blue-600 text-white border-blue-600' : 'bg-white text-slate-600 border-slate-200 hover:bg-slate-50'}`}
+          className={`flex-1 py-2.5 px-3 rounded-full font-semibold text-xs transition-all border-0 text-center truncate cursor-pointer ${
+            activeTab === 'order' 
+              ? 'bg-blue-600 text-white shadow-apple-soft' 
+              : 'text-slate-600 hover:text-slate-900'
+          }`}
         >
           Item Đặt Hàng
         </button>
-        <button 
-          onClick={() => setActiveTab('destruction')}
-          className={`py-2.5 px-1 rounded-2xl font-bold text-xs transition-all shadow-sm border text-center truncate ${activeTab === 'destruction' ? 'bg-rose-600 text-white border-rose-600' : 'bg-white text-slate-600 border-slate-200 hover:bg-slate-50'}`}
-        >
-          Biên bản hủy hàng
-        </button>
       </div>
 
-      {importProgress && (
-        <div className="mb-4 p-3.5 bg-blue-50 border border-blue-200 rounded-2xl flex items-center justify-between gap-3 text-xs font-bold text-blue-700 animate-pulse">
-          <div className="flex items-center gap-2">
-            <span className="w-2.5 h-2.5 rounded-full bg-blue-600 animate-ping shrink-0" />
-            <span>{importProgress}</span>
+      {importState && (
+        <div className="mb-5 p-5 bg-white/95 backdrop-blur-md rounded-3xl shadow-apple border-0 space-y-3">
+          <div className="flex items-center justify-between text-xs font-bold text-slate-800">
+            <div className="flex items-center gap-2 text-blue-600">
+              <span className="w-2.5 h-2.5 rounded-full bg-blue-600 animate-ping shrink-0" />
+              <span>{importState.title}</span>
+            </div>
+            <span className="font-mono text-blue-600 text-sm font-extrabold">
+              {importState.total > 0 ? Math.min(100, Math.round((importState.done / importState.total) * 100)) : 0}%
+            </span>
           </div>
-          <span className="text-[0.7rem] font-semibold text-blue-500">Vui lòng chờ</span>
+
+          <div className="w-full bg-slate-100 rounded-full h-3 overflow-hidden p-0.5 border-0">
+            <div 
+              className="bg-gradient-to-r from-blue-600 to-indigo-600 h-full rounded-full transition-all duration-200 shadow-2xs"
+              style={{ width: `${importState.total > 0 ? Math.min(100, Math.round((importState.done / importState.total) * 100)) : 0}%` }}
+            />
+          </div>
+
+          <div className="flex items-center justify-between text-[0.72rem] text-slate-500 font-medium">
+            <span>Đã nạp: <strong className="text-slate-800 font-mono">{importState.done.toLocaleString('vi-VN')}</strong> / {importState.total.toLocaleString('vi-VN')}</span>
+            <span className="text-blue-500 font-semibold">Vui lòng chờ...</span>
+          </div>
         </div>
       )}
 
       {activeTab === 'sell' && (
         <div className="animate-in fade-in zoom-in-95 duration-200">
           <div className="grid grid-cols-2 gap-4 mb-6">
-            <button onClick={handleExportSell} className="py-4 bg-white border border-slate-200 text-slate-700 font-bold rounded-[1.2rem] shadow-sm flex flex-col items-center justify-center gap-2 active:scale-95 transition-all cursor-pointer">
-              <Upload className="text-indigo-500" size={24} /> Xuất CSV
+            <button onClick={handleExportSell} className="py-5 px-4 bg-white/95 backdrop-blur-md text-slate-800 font-semibold rounded-3xl shadow-apple-soft hover:shadow-apple flex flex-col items-center justify-center gap-2.5 active:scale-95 transition-all cursor-pointer border-0">
+              <div className="w-11 h-11 rounded-full bg-indigo-50 text-indigo-600 flex items-center justify-center">
+                <Upload size={22} />
+              </div>
+              <span className="text-sm">Xuất file CSV</span>
             </button>
-            <label className={`py-4 bg-white border border-slate-200 text-slate-700 font-bold rounded-[1.2rem] shadow-sm flex flex-col items-center justify-center gap-2 transition-all ${importProgress ? 'opacity-50 cursor-not-allowed' : 'active:scale-95 cursor-pointer'}`}>
-              <Download className="text-indigo-500" size={24} /> Nhập CSV
-              <input type="file" accept=".csv" className="hidden" onChange={handleImportSell} disabled={Boolean(importProgress)} />
+            <label className={`py-5 px-4 bg-white/95 backdrop-blur-md text-slate-800 font-semibold rounded-3xl shadow-apple-soft hover:shadow-apple flex flex-col items-center justify-center gap-2.5 transition-all border-0 ${importState ? 'opacity-50 cursor-not-allowed' : 'active:scale-95 cursor-pointer'}`}>
+              <div className="w-11 h-11 rounded-full bg-blue-50 text-blue-600 flex items-center justify-center">
+                <Download size={22} />
+              </div>
+              <span className="text-sm">Nhập file CSV</span>
+              <input type="file" accept=".csv, .xlsx, .xls, .txt" className="hidden" onChange={handleImportSell} disabled={Boolean(importState)} />
             </label>
-            <button onClick={handleClearSell} className="col-span-2 py-3 bg-rose-50 border border-rose-200 text-rose-700 font-bold rounded-[1.2rem] shadow-sm flex items-center justify-center gap-2 active:scale-95 transition-all hover:bg-rose-100 cursor-pointer text-sm">
-              <Trash size={18} /> Xóa CSDL Item Bán
+            <button onClick={handleClearSell} className="col-span-2 py-3.5 bg-rose-50 text-rose-700 font-semibold rounded-full shadow-apple-soft flex items-center justify-center gap-2 active:scale-95 transition-all hover:bg-rose-100 cursor-pointer text-xs border-0">
+              <Trash size={16} /> Xóa CSDL Item Bán
             </button>
           </div>
 
           <div className="grid grid-cols-2 gap-4 pb-24">
-            <div className="bg-white p-5 rounded-[1.5rem] shadow-sm border border-slate-100 text-center">
-              <div className="text-[0.7rem] uppercase font-bold text-slate-400 tracking-wider mb-2">Tổng sản phẩm</div>
-              <div className="text-3xl font-black text-slate-800">{totalProductsCount !== null ? totalProductsCount : products.length}</div>
+            <div className="bg-white/95 backdrop-blur-md p-6 rounded-3xl shadow-apple-soft border-0 text-center">
+              <div className="text-xs uppercase font-semibold text-slate-400 tracking-wider mb-2">Tổng sản phẩm</div>
+              <div className="text-3xl font-bold text-slate-900">{(totalProductsCount !== null ? totalProductsCount : products.length).toLocaleString('vi-VN')}</div>
             </div>
-            <div className="bg-white p-5 rounded-[1.5rem] shadow-sm border border-slate-100 text-center">
-              <div className="text-[0.7rem] uppercase font-bold text-slate-400 tracking-wider mb-2">Tổng record hạn</div>
-              <div className="text-3xl font-black text-blue-600">{totalRecords}</div>
+            <div className="bg-white/95 backdrop-blur-md p-6 rounded-3xl shadow-apple-soft border-0 text-center">
+              <div className="text-xs uppercase font-semibold text-slate-400 tracking-wider mb-2">Tổng record hạn</div>
+              <div className="text-3xl font-bold text-blue-600">{totalRecords.toLocaleString('vi-VN')}</div>
             </div>
-            <div className="bg-white p-5 rounded-[1.5rem] shadow-sm border border-slate-100 text-center col-span-2">
-              <div className="text-[0.7rem] uppercase font-bold text-slate-400 tracking-wider mb-1">Tổng giá trị hàng</div>
-              <div className="text-2xl font-black text-emerald-600">{(totalProductsPrice !== null ? totalProductsPrice : totalValue).toLocaleString('vi-VN')}đ</div>
+            <div className="bg-white/95 backdrop-blur-md p-6 rounded-3xl shadow-apple-soft border-0 text-center col-span-2">
+              <div className="text-xs uppercase font-semibold text-slate-400 tracking-wider mb-1">Tổng giá trị hàng</div>
+              <div className="text-2xl font-bold text-emerald-600">{(totalProductsPrice !== null ? totalProductsPrice : totalValue).toLocaleString('vi-VN')}đ</div>
             </div>
           </div>
         </div>
@@ -1826,278 +1897,32 @@ export const DataScreen: React.FC<{
       {activeTab === 'order' && (
         <div className="animate-in fade-in zoom-in-95 duration-200">
           <div className="grid grid-cols-2 gap-4 mb-6">
-            <button onClick={handleExportOrder} className="py-4 bg-white border border-slate-200 text-slate-700 font-bold rounded-[1.2rem] shadow-sm flex flex-col items-center justify-center gap-2 active:scale-95 transition-all cursor-pointer">
-              <Upload className="text-blue-500" size={24} /> Xuất CSV
+            <button onClick={handleExportOrder} className="py-5 px-4 bg-white/95 backdrop-blur-md text-slate-800 font-semibold rounded-3xl shadow-apple-soft hover:shadow-apple flex flex-col items-center justify-center gap-2.5 active:scale-95 transition-all cursor-pointer border-0">
+              <div className="w-11 h-11 rounded-full bg-blue-50 text-blue-600 flex items-center justify-center">
+                <Upload size={22} />
+              </div>
+              <span className="text-sm">Xuất file CSV</span>
             </button>
-            <label className={`py-4 bg-white border border-slate-200 text-slate-700 font-bold rounded-[1.2rem] shadow-sm flex flex-col items-center justify-center gap-2 transition-all ${importProgress ? 'opacity-50 cursor-not-allowed' : 'active:scale-95 cursor-pointer'}`}>
-              <Download className="text-blue-500" size={24} /> Nhập CSV
-              <input type="file" accept=".csv" className="hidden" onChange={handleImportOrder} disabled={Boolean(importProgress)} />
+            <label className={`py-5 px-4 bg-white/95 backdrop-blur-md text-slate-800 font-semibold rounded-3xl shadow-apple-soft hover:shadow-apple flex flex-col items-center justify-center gap-2.5 transition-all border-0 ${importState ? 'opacity-50 cursor-not-allowed' : 'active:scale-95 cursor-pointer'}`}>
+              <div className="w-11 h-11 rounded-full bg-blue-50 text-blue-600 flex items-center justify-center">
+                <Download size={22} />
+              </div>
+              <span className="text-sm">Nhập file CSV</span>
+              <input type="file" accept=".csv, .xlsx, .xls, .txt" className="hidden" onChange={handleImportOrder} disabled={Boolean(importState)} />
             </label>
-            <button onClick={handleClearOrder} className="col-span-2 py-3 bg-rose-50 border border-rose-200 text-rose-700 font-bold rounded-[1.2rem] shadow-sm flex items-center justify-center gap-2 active:scale-95 transition-all hover:bg-rose-100 cursor-pointer text-sm">
-              <Trash size={18} /> Xóa CSDL Item Đặt Hàng
+            <button onClick={handleClearOrder} className="col-span-2 py-3.5 bg-rose-50 text-rose-700 font-semibold rounded-full shadow-apple-soft flex items-center justify-center gap-2 active:scale-95 transition-all hover:bg-rose-100 cursor-pointer text-xs border-0">
+              <Trash size={16} /> Xóa CSDL Item Đặt Hàng
             </button>
           </div>
 
           <div className="grid grid-cols-2 gap-4 pb-24">
-            <div className="bg-white p-5 rounded-[1.5rem] shadow-sm border border-slate-100 text-center col-span-2">
-              <div className="text-[0.7rem] uppercase font-bold text-slate-400 tracking-wider mb-2">Tổng mặt hàng đặt</div>
-              <div className="text-3xl font-black text-blue-600">{consumables.length}</div>
+            <div className="bg-white/95 backdrop-blur-md p-6 rounded-3xl shadow-apple-soft border-0 text-center col-span-2">
+              <div className="text-xs uppercase font-semibold text-slate-400 tracking-wider mb-2">Tổng mặt hàng đặt</div>
+              <div className="text-3xl font-bold text-blue-600">{consumables.length.toLocaleString('vi-VN')}</div>
             </div>
           </div>
         </div>
       )}
-
-      {activeTab === 'destruction' && (
-        <div className="animate-in fade-in zoom-in-95 duration-200 space-y-4 pb-24">
-          <div className="bg-linear-to-r from-rose-50 to-orange-50 border border-rose-200/80 rounded-2xl p-3.5 flex items-start justify-between gap-3 shadow-xs">
-            <div className="flex items-start gap-2.5">
-              <div className="w-8 h-8 rounded-xl bg-rose-100 text-rose-600 flex items-center justify-center shrink-0 mt-0.5">
-                <FileText size={18} />
-              </div>
-              <div>
-                <h4 className="text-xs font-bold text-rose-950">Định dạng file: CSV (UTF-8)</h4>
-                <p className="text-[0.72rem] text-rose-800/80 mt-0.5 leading-relaxed">
-                  Cấu trúc 6 cột: <span className="font-semibold text-rose-950">STT, Mã nội bộ, Barcode, Tên hàng, Số lượng, Ghi chú</span>
-                </p>
-              </div>
-            </div>
-            <button
-              onClick={() => setShowCsvModal(true)}
-              className="px-2.5 py-1.5 bg-white border border-rose-200 text-rose-700 hover:bg-rose-50 rounded-xl text-xs font-bold shrink-0 transition-all shadow-xs flex items-center gap-1 active:scale-95"
-            >
-              <HelpCircle size={14} />
-              Xem mẫu
-            </button>
-          </div>
-
-          <div className="grid grid-cols-2 gap-3">
-            <label className={`py-4 px-3 bg-white border border-slate-200 hover:border-rose-300 text-slate-700 font-bold rounded-[1.2rem] shadow-sm flex flex-col items-center justify-center gap-2 transition-all cursor-pointer text-center ${importProgress ? 'opacity-50 cursor-not-allowed' : 'active:scale-95'}`}>
-              <Download className="text-rose-600" size={24} />
-              <div className="text-xs">
-                <span className="block text-slate-800 font-extrabold text-[0.82rem]">Nhập file CSV</span>
-                <span className="text-[0.68rem] text-slate-400 font-normal">Tự nhận diện Barcode & Tên hàng</span>
-              </div>
-              <input 
-                type="file" 
-                accept=".csv, .txt, .xlsx, .xls" 
-                className="hidden" 
-                onChange={handleImportDestructionFile}
-                disabled={Boolean(importProgress || isImportingDestruction)}
-              />
-            </label>
-
-            <button 
-              onClick={handleExportDestructionCSV} 
-              className="py-4 px-3 bg-white border border-slate-200 hover:border-rose-300 text-slate-700 font-bold rounded-[1.2rem] shadow-sm flex flex-col items-center justify-center gap-2 active:scale-95 transition-all text-center cursor-pointer"
-            >
-              <Upload className="text-rose-600" size={24} />
-              <div className="text-xs">
-                <span className="block text-slate-800 font-extrabold text-[0.82rem]">Xuất file CSV</span>
-                <span className="text-[0.68rem] text-slate-400 font-normal">Tải về danh sách hiện tại (.csv)</span>
-              </div>
-            </button>
-          </div>
-
-          {/* Nút tải file mẫu CSV và nạp mẫu */}
-          <div className="grid grid-cols-2 gap-2.5">
-            <button
-              onClick={handleDownloadSampleDestructionCSV}
-              className="py-3 px-3 bg-slate-50 border border-slate-200 text-slate-700 font-bold rounded-xl text-xs flex items-center justify-center gap-1.5 hover:bg-slate-100 transition-all active:scale-95"
-            >
-              <FileDown size={16} className="text-blue-500" />
-              Tải file mẫu CSV
-            </button>
-            <button
-              onClick={handleResetDestructionToSample}
-              className="py-3 px-3 bg-slate-50 border border-slate-200 text-slate-700 font-bold rounded-xl text-xs flex items-center justify-center gap-1.5 hover:bg-slate-100 transition-all active:scale-95"
-            >
-              <RotateCcw size={16} className="text-amber-500" />
-              Nạp dữ liệu mẫu ban đầu
-            </button>
-          </div>
-
-          {/* Thẻ thống kê */}
-          <div className="bg-white p-5 rounded-[1.5rem] shadow-sm border border-slate-100 flex items-center justify-between">
-            <div>
-              <div className="text-[0.7rem] uppercase font-bold text-slate-400 tracking-wider mb-1">
-                Số mặt hàng trong biên bản hủy
-              </div>
-              <div className="text-3xl font-black text-rose-600">
-                {destructionItems.length}
-              </div>
-            </div>
-            <div className="w-12 h-12 rounded-2xl bg-rose-50 text-rose-600 flex items-center justify-center">
-              <FileText size={24} />
-            </div>
-          </div>
-
-          {/* Xem trước nhanh 5 dòng đầu */}
-          {destructionItems.length > 0 && (
-            <div className="bg-white rounded-2xl border border-slate-200/90 shadow-sm overflow-hidden p-3.5">
-              <div className="text-xs font-bold text-slate-700 mb-2 flex items-center justify-between">
-                <span>Xem trước danh sách ({destructionItems.length} hàng):</span>
-                <span className="text-[0.7rem] text-slate-400">Hiển thị 5 dòng đầu</span>
-              </div>
-              <div className="divide-y divide-slate-100 text-xs">
-                {destructionItems.slice(0, 5).map((it, idx) => (
-                  <div key={it.id || idx} className="py-2 flex items-center justify-between gap-2">
-                    <div className="flex items-center gap-2 min-w-0">
-                      <span className="font-mono font-bold text-slate-500 bg-slate-100 px-1.5 py-0.5 rounded text-[0.7rem] shrink-0">
-                        #{it.stt ?? (idx + 1)}
-                      </span>
-                      <span className="font-medium text-slate-800 truncate text-[0.82rem]">{it.name}</span>
-                    </div>
-                    <div className="flex items-center gap-1.5 text-[0.7rem] font-mono text-slate-500 shrink-0">
-                      {it.internalCode && <span className="bg-blue-50 text-blue-700 px-1 py-0.5 rounded">{it.internalCode}</span>}
-                      <span>{it.barcode}</span>
-                    </div>
-                  </div>
-                ))}
-              </div>
-            </div>
-          )}
-
-          {/* Nút xóa sạch CSDL Biên bản hủy */}
-          <button 
-            onClick={handleClearDestruction} 
-            className="w-full py-4 bg-rose-50 border border-rose-200 text-rose-700 font-bold rounded-[1.2rem] shadow-sm flex items-center justify-center gap-2 active:scale-95 transition-all hover:bg-rose-100 text-xs"
-          >
-            <Trash size={18} /> Xóa toàn bộ CSDL Biên Bản Hủy Hàng
-          </button>
-        </div>
-      )}
-
-      {/* MODAL CHI TIẾT CẤU TRÚC FILE CSV ĐỂ TỰ NHẬP */}
-      <AnimatePresence>
-        {showCsvModal && (
-          <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
-            <motion.div 
-              initial={{ opacity: 0 }} 
-              animate={{ opacity: 1 }} 
-              exit={{ opacity: 0 }} 
-              className="absolute inset-0 bg-slate-900/40 backdrop-blur-xs"
-              onClick={() => setShowCsvModal(false)}
-            />
-            <motion.div 
-              initial={{ scale: 0.95, opacity: 0, y: 10 }} 
-              animate={{ scale: 1, opacity: 1, y: 0 }} 
-              exit={{ scale: 0.95, opacity: 0, y: 10 }}
-              className="relative w-full max-w-lg bg-white rounded-3xl p-5 shadow-2xl z-10 max-h-[90vh] overflow-y-auto space-y-4"
-            >
-              <div className="flex items-center justify-between pb-2 border-b border-slate-100">
-                <div className="flex items-center gap-2">
-                  <div className="w-8 h-8 rounded-xl bg-rose-100 text-rose-600 flex items-center justify-center font-bold">
-                    <FileText size={18} />
-                  </div>
-                  <div>
-                    <h3 className="text-sm font-bold text-slate-800">Cấu trúc File CSV Hủy Hàng</h3>
-                    <p className="text-[0.7rem] text-slate-400">Định dạng chuẩn để bạn tự nhập file</p>
-                  </div>
-                </div>
-                <button 
-                  onClick={() => setShowCsvModal(false)}
-                  className="p-1.5 text-slate-400 hover:text-slate-600 hover:bg-slate-100 rounded-full"
-                >
-                  <X size={18} />
-                </button>
-              </div>
-
-              {/* Bảng giải thích chi tiết các cột */}
-              <div className="space-y-2 text-xs">
-                <div className="font-bold text-slate-700">Các cột dữ liệu (thứ tự ưu tiên):</div>
-                <div className="border border-slate-200 rounded-xl overflow-hidden divide-y divide-slate-100 text-[0.75rem]">
-                  <div className="bg-slate-50 p-2 font-bold text-slate-700 grid grid-cols-12 gap-1">
-                    <span className="col-span-3">Tên cột</span>
-                    <span className="col-span-3">Bắt buộc?</span>
-                    <span className="col-span-6">Mô tả & Ví dụ</span>
-                  </div>
-                  <div className="p-2 grid grid-cols-12 gap-1 items-center">
-                    <span className="col-span-3 font-mono font-bold text-rose-600">STT</span>
-                    <span className="col-span-3 text-slate-500">Khuyên dùng</span>
-                    <span className="col-span-6 text-slate-600">Số thứ tự trên biên bản giấy in (1, 2, 3...) để dễ tra cứu</span>
-                  </div>
-                  <div className="p-2 grid grid-cols-12 gap-1 items-center">
-                    <span className="col-span-3 font-mono font-bold text-blue-600">Mã nội bộ</span>
-                    <span className="col-span-3 text-emerald-600 font-medium">Bắt buộc*</span>
-                    <span className="col-span-6 text-slate-600">Mã sản phẩm nội bộ (ví dụ: <code className="bg-slate-100 px-1 py-0.5 rounded">100234</code>)</span>
-                  </div>
-                  <div className="p-2 grid grid-cols-12 gap-1 items-center">
-                    <span className="col-span-3 font-mono font-bold text-indigo-600">Barcode</span>
-                    <span className="col-span-3 text-emerald-600 font-medium">Bắt buộc*</span>
-                    <span className="col-span-6 text-slate-600">Mã vạch sản phẩm (ví dụ: <code className="bg-slate-100 px-1 py-0.5 rounded">8934567890123</code>)</span>
-                  </div>
-                  <div className="p-2 grid grid-cols-12 gap-1 items-center">
-                    <span className="col-span-3 font-mono font-bold text-slate-800">Tên hàng</span>
-                    <span className="col-span-3 text-rose-600 font-bold">Bắt buộc</span>
-                    <span className="col-span-6 text-slate-600">Tên đầy đủ của sản phẩm</span>
-                  </div>
-                  <div className="p-2 grid grid-cols-12 gap-1 items-center">
-                    <span className="col-span-3 font-mono font-bold text-slate-600">Số lượng</span>
-                    <span className="col-span-3 text-slate-400">Tùy chọn</span>
-                    <span className="col-span-6 text-slate-600">Số lượng ghi trên biên bản (nếu có, hoặc để trống)</span>
-                  </div>
-                  <div className="p-2 grid grid-cols-12 gap-1 items-center">
-                    <span className="col-span-3 font-mono font-bold text-slate-600">Ghi chú</span>
-                    <span className="col-span-3 text-slate-400">Tùy chọn</span>
-                    <span className="col-span-6 text-slate-600">Lý do hủy: Hết hạn, móp méo, rách bao bì...</span>
-                  </div>
-                </div>
-                <p className="text-[0.7rem] text-slate-400 italic">
-                  * Ghi chú: Nếu file có Mã nội bộ thì Barcode có thể tự lấy theo Mã nội bộ và ngược lại.
-                </p>
-              </div>
-
-              {/* Khung nội dung CSV mẫu copy trực tiếp */}
-              <div className="space-y-1.5">
-                <div className="flex items-center justify-between text-xs">
-                  <span className="font-bold text-slate-700">Nội dung file CSV mẫu:</span>
-                  <button
-                    onClick={handleCopySampleCSV}
-                    className="flex items-center gap-1 text-[0.72rem] font-bold text-rose-600 hover:text-rose-700 bg-rose-50 px-2 py-1 rounded-lg transition-all"
-                  >
-                    {copiedCsvSample ? <Check size={13} className="text-emerald-600" /> : <Copy size={13} />}
-                    {copiedCsvSample ? 'Đã sao chép!' : 'Sao chép văn bản'}
-                  </button>
-                </div>
-                <div className="bg-slate-900 text-slate-100 p-3 rounded-xl font-mono text-[0.72rem] leading-relaxed overflow-x-auto whitespace-pre selection:bg-rose-500 selection:text-white">
-                  {SAMPLE_CSV_CONTENT}
-                </div>
-              </div>
-
-              {/* Hướng dẫn lưu file CSV trong Excel / Notepad */}
-              <div className="bg-amber-50 border border-amber-200 rounded-xl p-3 text-[0.72rem] text-amber-900 space-y-1">
-                <div className="font-bold flex items-center gap-1 text-amber-950">
-                  <HelpCircle size={14} className="text-amber-600" />
-                  Mẹo khi tạo file bằng Excel / Notepad:
-                </div>
-                <ul className="list-disc pl-4 space-y-0.5 text-amber-800">
-                  <li>Trong Excel: Chọn <strong>Save As</strong> &gt; Định dạng <strong>CSV UTF-8 (Comma delimited) (*.csv)</strong> để không bị lỗi dấu tiếng Việt.</li>
-                  <li>Trong Notepad: Dán văn bản vào &gt; Chọn <strong>Save As</strong> &gt; Đặt đuôi <code className="bg-amber-100 px-1 rounded">.csv</code> &gt; Encoding chọn <strong>UTF-8</strong>.</li>
-                </ul>
-              </div>
-
-              {/* Nút hành động */}
-              <div className="flex gap-2 pt-1">
-                <button
-                  type="button"
-                  onClick={handleDownloadSampleDestructionCSV}
-                  className="flex-1 py-3 bg-rose-600 hover:bg-rose-700 text-white font-bold rounded-xl text-xs flex items-center justify-center gap-1.5 shadow-md shadow-rose-500/20 active:scale-95 transition-all"
-                >
-                  <FileDown size={16} />
-                  Tải file .CSV mẫu về máy
-                </button>
-                <button
-                  type="button"
-                  onClick={() => setShowCsvModal(false)}
-                  className="py-3 px-4 bg-slate-100 hover:bg-slate-200 text-slate-700 font-bold rounded-xl text-xs transition-all"
-                >
-                  Đóng
-                </button>
-              </div>
-            </motion.div>
-          </div>
-        )}
-      </AnimatePresence>
 
     </motion.div>
   );

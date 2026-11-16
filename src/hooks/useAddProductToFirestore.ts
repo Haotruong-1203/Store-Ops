@@ -1,6 +1,5 @@
 import { useState, useCallback } from 'react';
-import { collection, query, where, getDocs, addDoc, serverTimestamp } from 'firebase/firestore';
-import { db } from '../lib/firebase';
+import { supabase } from '../lib/supabase';
 import { ProductData } from '../types/product';
 
 export interface AddProductResult {
@@ -20,7 +19,6 @@ export const useAddProductToFirestore = (): AddProductResult => {
     setError(null);
     setDocId(null);
 
-    // 1. Validation
     if (!data.name || data.name.trim().length < 2) {
       setError('Vui lòng nhập tên sản phẩm.');
       setLoading(false);
@@ -48,44 +46,41 @@ export const useAddProductToFirestore = (): AddProductResult => {
     const trimmedBarcode = data.barcode.trim();
 
     try {
-      const productsRef = collection(db, 'products');
+      const { data: existing } = await supabase
+        .from('products')
+        .select('id')
+        .eq('barcode', trimmedBarcode)
+        .limit(1)
+        .maybeSingle();
 
-      // 2. Check if product already exists to prevent duplicates
-      const dupQuery = query(productsRef, where('barcode', '==', trimmedBarcode));
-      const dupSnapshot = await getDocs(dupQuery);
-
-      if (!dupSnapshot.empty) {
-        const existingDoc = dupSnapshot.docs[0];
+      if (existing) {
         setError(`Sản phẩm với mã vạch ${trimmedBarcode} đã tồn tại trong hệ thống.`);
         setLoading(false);
-        return existingDoc.id;
+        return String(existing.id);
       }
 
-      // 3. Create document in Firestore
+      const generatedId = trimmedBarcode ? ('bc_' + trimmedBarcode) : ('prod_' + Date.now() + '_' + Math.random().toString(36).substring(2, 7));
       const newDocData = {
+        id: generatedId,
         name: data.name.trim(),
         barcode: trimmedBarcode,
         price: Number(data.price) || 0,
         destroyDaysBeforeExpiry: Number(data.daysBeforeExpiry) || 0,
-        internalCode: data.internalCode ? data.internalCode.trim() : '',
-        sku: data.internalCode ? data.internalCode.trim() : trimmedBarcode,
-        priceTagImageUrl: data.imageUrl || null,
+        internalCode: data.internalCode ? data.internalCode.trim() : null,
         destructionDate: '',
         expiryRecords: [],
-        status: 'active',
-        userId: currentUserId || 'all',
-        createdBy: currentUserId || 'all',
+        assignedUser: currentUserId || 'shared',
         createdAt: new Date().toISOString(),
-        updatedAt: new Date().toISOString(),
-        serverTimestamp: serverTimestamp()
+        updatedAt: new Date().toISOString()
       };
 
-      const docRef = await addDoc(productsRef, newDocData);
-      setDocId(docRef.id);
+      const { error: insErr } = await supabase.from('products').upsert([newDocData], { onConflict: 'id' });
+      if (insErr) throw insErr;
+
+      setDocId(generatedId);
       setLoading(false);
-      return docRef.id;
+      return generatedId;
     } catch (err: any) {
-      console.error('Add product to Firestore error:', err);
       const msg = err.message || 'Lỗi kết nối cơ sở dữ liệu. Vui lòng thử lại.';
       setError(msg);
       setLoading(false);

@@ -5,12 +5,42 @@ export function formatDate(d: string | undefined | null) {
   return new Date(d).toLocaleDateString('vi-VN', { year: 'numeric', month: '2-digit', day: '2-digit' });
 }
 
+export function parseDateSafe(d: string | undefined | null): Date | null {
+  if (!d) return null;
+  const s = String(d).trim();
+  if (!s || s.startsWith('00') || s.includes('1900') || s.includes('1999') || s.includes('2000') || s.includes('2001')) return null;
+  
+  const parts = s.split(/[\/\-\.]/);
+  if (parts.length === 3) {
+    let year = 0, month = 0, day = 0;
+    if (parts[0].length === 4) {
+      year = parseInt(parts[0], 10);
+      month = parseInt(parts[1], 10) - 1;
+      day = parseInt(parts[2], 10);
+    } else {
+      day = parseInt(parts[0], 10);
+      month = parseInt(parts[1], 10) - 1;
+      year = parseInt(parts[2], 10);
+    }
+    if (!isNaN(year) && !isNaN(month) && !isNaN(day)) {
+      const parsed = new Date(year, month, day);
+      if (!isNaN(parsed.getTime())) return parsed;
+    }
+  }
+
+  const dt = new Date(s);
+  return isNaN(dt.getTime()) ? null : dt;
+}
+
 export function calculateDestructionDate(expDate: string, daysBefore: number): string {
   if (!expDate) return '';
-  const d = new Date(expDate);
-  if (isNaN(d.getTime())) return '';
+  const d = parseDateSafe(expDate);
+  if (!d) return '';
   d.setDate(d.getDate() - (Number(daysBefore) || 0));
-  return d.toISOString().split('T')[0];
+  const year = d.getFullYear();
+  const month = String(d.getMonth() + 1).padStart(2, '0');
+  const day = String(d.getDate()).padStart(2, '0');
+  return `${year}-${month}-${day}`;
 }
 
 export function getStatus(d: string | undefined | null) {
@@ -23,8 +53,9 @@ export function getStatus(d: string | undefined | null) {
     isExpired: false, 
     isNear: false 
   };
-  const today = new Date(), target = new Date(d);
+  const today = new Date();
   today.setHours(0, 0, 0, 0);
+  const target = parseDateSafe(d) || new Date(d);
   target.setHours(0, 0, 0, 0);
   const diffTime = target.getTime() - today.getTime();
   const diffDays = Math.ceil(diffTime / (1000 * 60 * 60 * 24));
@@ -62,23 +93,30 @@ export function getStatus(d: string | undefined | null) {
   };
 }
 
+export function isValidRealExpiryDate(d: string | undefined | null): boolean {
+  const dt = parseDateSafe(d);
+  if (!dt) return false;
+  const year = dt.getFullYear();
+  return year >= 2024 && year <= 2040;
+}
+
 export function getProductRecords(product: Product): ExpiryRecord[] {
+  let list: ExpiryRecord[] = [];
   if (product.expiryRecords && product.expiryRecords.length > 0) {
-    return [...product.expiryRecords].sort((a, b) => new Date(a.destructionDate).getTime() - new Date(b.destructionDate).getTime());
-  }
-  if (product.destructionDate) {
-    return [{
+    list = product.expiryRecords.filter(r => isValidRealExpiryDate(r.destructionDate));
+  } else if (product.destructionDate && isValidRealExpiryDate(product.destructionDate)) {
+    list = [{
       id: 'rec-' + (product.id || 'default'),
       expDate: product.destructionDate,
       destructionDate: product.destructionDate,
       createdAt: new Date().toISOString()
     }];
   }
-  return [];
+  return list.sort((a, b) => new Date(a.destructionDate).getTime() - new Date(b.destructionDate).getTime());
 }
 
 export function getEarliestDestructionDate(product: Product): string {
   const records = getProductRecords(product);
-  if (records.length === 0) return product.destructionDate || '';
+  if (records.length === 0) return (product.destructionDate && isValidRealExpiryDate(product.destructionDate)) ? product.destructionDate : '';
   return records[0].destructionDate;
 }

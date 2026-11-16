@@ -106,7 +106,7 @@ export const ProductList: React.FC<ProductListProps> = ({
         {[1, 2, 3, 4].map(idx => (
           <div 
             key={idx} 
-            className="bg-white border border-slate-200/60 rounded-3xl p-4 shadow-sm animate-pulse space-y-3"
+            className="bg-white/90 backdrop-blur-md rounded-3xl p-5 shadow-apple animate-pulse space-y-3 border-0"
           >
             <div className="flex justify-between items-start">
               <div className="space-y-2 flex-1">
@@ -116,7 +116,7 @@ export const ProductList: React.FC<ProductListProps> = ({
               <div className="h-5 bg-slate-200 rounded-md w-16"></div>
             </div>
             <div className="h-10 bg-slate-50 rounded-xl"></div>
-            <div className="flex justify-end gap-2 pt-2 border-t border-slate-100">
+            <div className="flex justify-end gap-2 pt-2 ">
               <div className="h-7 bg-slate-200 rounded-lg w-16"></div>
               <div className="h-7 bg-slate-200 rounded-lg w-16"></div>
             </div>
@@ -133,7 +133,7 @@ export const ProductList: React.FC<ProductListProps> = ({
         <motion.div 
           initial={{ opacity: 0, y: -8 }} 
           animate={{ opacity: 1, y: 0 }} 
-          className="mb-4 p-5 bg-gradient-to-br from-amber-50 to-orange-50 border-2 border-dashed border-amber-300 rounded-[1.5rem] text-center shadow-sm"
+          className="mb-4 p-6 bg-slate-100/80 rounded-3xl text-center shadow-apple border-0"
         >
           <div className="w-12 h-12 mx-auto mb-2 rounded-full bg-amber-100 flex items-center justify-center text-amber-600">
             <BarcodeIcon size={24} />
@@ -148,7 +148,7 @@ export const ProductList: React.FC<ProductListProps> = ({
             <button 
               type="button"
               onClick={() => onOpenCreateWithCode(searchTerm)}
-              className="w-full py-3 bg-gradient-to-r from-blue-600 to-indigo-600 text-white font-bold rounded-2xl shadow-md shadow-blue-500/20 active:scale-95 transition-all flex items-center justify-center gap-2 text-[0.92rem]"
+              className="w-full py-3.5 bg-blue-600 hover:bg-blue-700 text-white font-bold rounded-full shadow-apple active:scale-95 transition-all flex items-center justify-center gap-2 text-[0.92rem] border-0 cursor-pointer"
             >
               <Plus size={18} /> Tạo mới sản phẩm với mã này
             </button>
@@ -197,7 +197,7 @@ export const ProductList: React.FC<ProductListProps> = ({
                 <button
                   type="button"
                   onClick={onLoadMore}
-                  className="px-5 py-2.5 bg-white border border-slate-200 hover:border-blue-400 text-slate-700 hover:text-blue-600 font-bold text-xs rounded-2xl shadow-sm hover:shadow active:scale-95 transition-all flex items-center gap-2"
+                  className="px-6 py-3 bg-white/95 hover:bg-white text-slate-700 hover:text-blue-600 font-bold text-xs rounded-full shadow-apple-soft hover:shadow-apple active:scale-95 transition-all flex items-center gap-2 border-0 cursor-pointer"
                 >
                   <span>Tải thêm 50 sản phẩm</span>
                   <span className="text-[0.7rem] bg-slate-100 text-slate-500 px-2 py-0.5 rounded-full font-semibold">

@@ -199,10 +199,10 @@ export const OrderImageModal: React.FC<OrderImageModalProps> = ({
           animate={{ y: 0, opacity: 1 }}
           exit={{ y: '100%', opacity: 0 }}
           transition={{ type: 'spring', damping: 25, stiffness: 220 }}
-          className="relative w-full max-w-xl bg-white rounded-t-[2.2rem] sm:rounded-[2rem] p-5 sm:p-6 max-h-[92vh] flex flex-col shadow-2xl z-10 overflow-hidden"
+          className="relative w-full max-w-xl bg-white/95 backdrop-blur-xl rounded-t-[2.5rem] sm:rounded-[2.5rem] p-6 max-h-[92vh] flex flex-col shadow-apple-lg z-10 overflow-hidden border-0"
         >
           {/* Header */}
-          <div className="flex justify-between items-start pb-3 border-b border-slate-100 shrink-0">
+          <div className="flex justify-between items-start pb-2 shrink-0">
             <div>
               <div className="flex items-center gap-2">
                 <span className="px-2.5 py-0.5 rounded-full text-xs font-black bg-blue-100 text-blue-700">
@@ -240,10 +240,10 @@ export const OrderImageModal: React.FC<OrderImageModalProps> = ({
               animate={{ opacity: 1, y: 0 }}
               className={`mt-3 p-3 rounded-2xl text-xs font-semibold flex items-start gap-2 ${
                 statusType === 'success'
-                  ? 'bg-emerald-50 text-emerald-800 border border-emerald-200'
+                  ? 'bg-emerald-50 text-emerald-800 border-0 shadow-apple-soft'
                   : statusType === 'error'
-                  ? 'bg-rose-50 text-rose-800 border border-rose-200'
-                  : 'bg-blue-50 text-blue-800 border border-blue-200'
+                  ? 'bg-rose-50 text-rose-800 border-0 shadow-apple-soft'
+                  : 'bg-blue-50 text-blue-800 border-0 shadow-apple-soft'
               }`}
             >
               {statusType === 'success' ? (
@@ -256,7 +256,7 @@ export const OrderImageModal: React.FC<OrderImageModalProps> = ({
           )}
 
           {/* Quick Summary Pill Bar */}
-          <div className="mt-3 py-2 px-3 bg-slate-50 border border-slate-200/80 rounded-2xl flex items-center justify-between text-xs text-slate-600 shrink-0">
+          <div className="mt-3 py-2.5 px-4 bg-slate-100/80 rounded-2xl flex items-center justify-between text-xs text-slate-600 shrink-0 border-0 shadow-apple-soft">
             <span className="flex items-center gap-1.5 font-medium">
               <Package size={14} className="text-blue-600" />
               Mặt hàng: <strong className="text-slate-900 font-bold">{order.records.length} loại</strong>
@@ -267,7 +267,7 @@ export const OrderImageModal: React.FC<OrderImageModalProps> = ({
           </div>
 
           {/* Image Preview Container */}
-          <div className="my-3 flex-1 overflow-y-auto no-scrollbar rounded-2xl border border-slate-200 bg-slate-100 p-2 sm:p-4 flex items-center justify-center min-h-[220px]">
+          <div className="my-3 flex-1 overflow-y-auto no-scrollbar rounded-3xl bg-slate-100/70 p-3 sm:p-4 flex items-center justify-center min-h-[220px] border-0 shadow-apple-soft">
             {isGenerating ? (
               <div className="flex flex-col items-center gap-3 py-10 text-slate-500">
                 <Loader2 size={32} className="animate-spin text-blue-600" />
@@ -278,7 +278,7 @@ export const OrderImageModal: React.FC<OrderImageModalProps> = ({
                 <img
                   src={receipt.dataUrl}
                   alt={`Phiếu đặt hàng #${orderNumber}`}
-                  className="w-full max-h-[50vh] object-contain rounded-xl shadow-md border border-slate-300 bg-white"
+                  className="w-full max-h-[50vh] object-contain rounded-2xl shadow-apple border-0 bg-white"
                 />
                 <div className="text-center mt-2">
                   <span className="text-[11px] text-slate-500 italic">
@@ -299,7 +299,7 @@ export const OrderImageModal: React.FC<OrderImageModalProps> = ({
                 type="button"
                 onClick={handleCopyImage}
                 disabled={isGenerating || !receipt}
-                className={`py-3.5 px-4 rounded-2xl font-bold text-xs sm:text-sm flex items-center justify-center gap-2 shadow-md transition-all cursor-pointer active:scale-95 disabled:opacity-50 disabled:cursor-not-allowed ${
+                className={`py-3.5 px-4 rounded-full font-bold text-xs sm:text-sm flex items-center justify-center gap-2 shadow-apple transition-all cursor-pointer active:scale-95 disabled:opacity-50 disabled:cursor-not-allowed border-0 ${
                   copiedImage
                     ? 'bg-emerald-600 text-white shadow-emerald-600/30'
                     : 'bg-gradient-to-r from-blue-600 to-indigo-600 hover:from-blue-700 hover:to-indigo-700 text-white shadow-blue-500/25'
@@ -322,7 +322,7 @@ export const OrderImageModal: React.FC<OrderImageModalProps> = ({
                 type="button"
                 onClick={handleDownload}
                 disabled={isGenerating || !receipt}
-                className="py-3.5 px-4 rounded-2xl font-bold text-xs sm:text-sm bg-slate-900 hover:bg-slate-800 text-white flex items-center justify-center gap-2 shadow-md active:scale-95 transition-all cursor-pointer disabled:opacity-50"
+                className="py-3.5 px-4 rounded-full font-bold text-xs sm:text-sm bg-slate-900 hover:bg-slate-800 text-white flex items-center justify-center gap-2 shadow-apple active:scale-95 transition-all cursor-pointer disabled:opacity-50 border-0"
               >
                 <Download size={18} />
                 <span>TẢI ẢNH VỀ MÁY</span>
@@ -335,7 +335,7 @@ export const OrderImageModal: React.FC<OrderImageModalProps> = ({
                 type="button"
                 onClick={handleShare}
                 disabled={isGenerating || !receipt}
-                className="py-2.5 px-3 rounded-xl font-bold text-xs bg-slate-100 hover:bg-slate-200 text-slate-700 flex items-center justify-center gap-1.5 transition-all cursor-pointer active:scale-95 border border-slate-200"
+                className="py-3 px-4 rounded-full font-bold text-xs bg-slate-100 hover:bg-slate-200 text-slate-700 flex items-center justify-center gap-1.5 transition-all cursor-pointer active:scale-95 border-0 shadow-apple-soft"
               >
                 <Share2 size={15} className="text-blue-600" />
                 <span>Chia sẻ qua Zalo/App</span>
@@ -344,7 +344,7 @@ export const OrderImageModal: React.FC<OrderImageModalProps> = ({
               <button
                 type="button"
                 onClick={handleCopyText}
-                className="py-2.5 px-3 rounded-xl font-bold text-xs bg-slate-100 hover:bg-slate-200 text-slate-700 flex items-center justify-center gap-1.5 transition-all cursor-pointer active:scale-95 border border-slate-200"
+                className="py-3 px-4 rounded-full font-bold text-xs bg-slate-100 hover:bg-slate-200 text-slate-700 flex items-center justify-center gap-1.5 transition-all cursor-pointer active:scale-95 border-0 shadow-apple-soft"
               >
                 {copiedText ? (
                   <>

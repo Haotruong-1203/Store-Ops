@@ -25,7 +25,14 @@ import { captureVideoFrame } from '../utils/canvasCapture';
 import { capturePriceTagFrame, uploadPriceTagImage } from '../utils/priceTagCapture';
 import { ProductConfirmationForm } from './ProductConfirmationForm';
 import { Product, ProductData } from '../types/product';
+import { Product as FirestoreProduct } from '../lib/firestoreService';
 import { formatDate } from '../lib/utils';
+import { 
+  DisposalTemplateItem, 
+  ResolvedDisposalProduct, 
+  resolveDisposalProductByCode,
+  formatBarcodeDisplay
+} from '../lib/disposalService';
 
 export interface BarcodeScannerModalProps {
   isOpen: boolean;
@@ -33,6 +40,10 @@ export interface BarcodeScannerModalProps {
   onProductFound?: (product: Product) => void;
   onOpenCreate?: (barcode: string) => void;
   currentUserId?: string;
+  disposalMode?: boolean;
+  disposalTemplates?: DisposalTemplateItem[];
+  localProducts?: FirestoreProduct[];
+  onDisposalProductFound?: (product: ResolvedDisposalProduct) => void;
 }
 
 export type ModalScanMode = 'barcode' | 'price_tag';
@@ -42,7 +53,11 @@ export const BarcodeScannerModal: React.FC<BarcodeScannerModalProps> = ({
   onClose,
   onProductFound,
   onOpenCreate,
-  currentUserId
+  currentUserId,
+  disposalMode = false,
+  disposalTemplates = [],
+  localProducts = [],
+  onDisposalProductFound
 }) => {
   // Mode: scanning barcode or scanning price tag
   const [scanMode, setScanMode] = useState<ModalScanMode>('barcode');
@@ -94,16 +109,46 @@ export const BarcodeScannerModal: React.FC<BarcodeScannerModalProps> = ({
     addProduct
   } = useAddProductToFirestore();
 
-  // Captured snapshot state
   const [capturedImage, setCapturedImage] = useState<string | null>(null);
   const [confirmedProductData, setConfirmedProductData] = useState<ProductData | null>(null);
   const [justSavedSuccess, setJustSavedSuccess] = useState(false);
+  const [disposalProduct, setDisposalProduct] = useState<ResolvedDisposalProduct | null>(null);
+  const [disposalLoading, setDisposalLoading] = useState(false);
+  const [disposalError, setDisposalError] = useState<string | null>(null);
 
   const fileInputRef = useRef<HTMLInputElement | null>(null);
   const priceTagFileInputRef = useRef<HTMLInputElement | null>(null);
   const lastProcessedBarcode = useRef<string | null>(null);
 
-  // Auto-start scan when modal opens
+  const runBarcodeLookup = React.useCallback(async (code: string) => {
+    if (disposalMode) {
+      setDisposalLoading(true);
+      setDisposalError(null);
+      setDisposalProduct(null);
+      try {
+        const resolved = await resolveDisposalProductByCode(
+          code,
+          disposalTemplates,
+          localProducts,
+          false
+        );
+        if (resolved) {
+          setDisposalProduct(resolved);
+          setDisposalError(null);
+        } else {
+          setDisposalProduct(null);
+          setDisposalError(`Không tìm thấy sản phẩm với mã: ${code}`);
+        }
+      } catch {
+        setDisposalError('Lỗi khi tra cứu sản phẩm. Vui lòng thử lại.');
+      } finally {
+        setDisposalLoading(false);
+      }
+      return;
+    }
+    await searchByBarcode(code);
+  }, [disposalMode, disposalTemplates, localProducts, searchByBarcode]);
+
   useEffect(() => {
     if (isOpen) {
       lastProcessedBarcode.current = null;
@@ -111,6 +156,9 @@ export const BarcodeScannerModal: React.FC<BarcodeScannerModalProps> = ({
       setScanMode('barcode');
       setConfirmedProductData(null);
       setJustSavedSuccess(false);
+      setDisposalProduct(null);
+      setDisposalError(null);
+      setDisposalLoading(false);
       resetBarcodeAnalysis();
       resetPriceTagOCR();
       startScan();
@@ -120,23 +168,24 @@ export const BarcodeScannerModal: React.FC<BarcodeScannerModalProps> = ({
       setCapturedImage(null);
       setConfirmedProductData(null);
       setJustSavedSuccess(false);
+      setDisposalProduct(null);
+      setDisposalError(null);
+      setDisposalLoading(false);
       resetBarcodeAnalysis();
       resetPriceTagOCR();
     }
   }, [isOpen, startScan, stopScan, setLiveBarcode, resetBarcodeAnalysis, resetPriceTagOCR]);
 
-  // When live barcode is detected by ZXing stream
   useEffect(() => {
     if (liveBarcode && liveBarcode !== lastProcessedBarcode.current && scanMode === 'barcode') {
       lastProcessedBarcode.current = liveBarcode;
       stopScan();
-      searchByBarcode(liveBarcode);
+      runBarcodeLookup(liveBarcode);
     }
-  }, [liveBarcode, searchByBarcode, stopScan, scanMode]);
+  }, [liveBarcode, runBarcodeLookup, stopScan, scanMode]);
 
-  // Auto-close after 1.8s on successful product found
   useEffect(() => {
-    if (product) {
+    if (!disposalMode && product) {
       const timer = setTimeout(() => {
         if (onProductFound) {
           onProductFound(product);
@@ -144,9 +193,19 @@ export const BarcodeScannerModal: React.FC<BarcodeScannerModalProps> = ({
       }, 1800);
       return () => clearTimeout(timer);
     }
-  }, [product, onProductFound]);
+  }, [disposalMode, product, onProductFound]);
 
-  // Handle Photo Capture for Barcode
+  useEffect(() => {
+    if (disposalMode && disposalProduct) {
+      const timer = setTimeout(() => {
+        if (onDisposalProductFound) {
+          onDisposalProductFound(disposalProduct);
+        }
+      }, 900);
+      return () => clearTimeout(timer);
+    }
+  }, [disposalMode, disposalProduct, onDisposalProductFound]);
+
   const handleCaptureBarcodePhoto = async () => {
     if (!videoRef.current) return;
     const base64Frame = captureVideoFrame(videoRef);
@@ -161,11 +220,10 @@ export const BarcodeScannerModal: React.FC<BarcodeScannerModalProps> = ({
     const result = await analyzeBarcodeImage(base64Frame);
     if (result && result.barcode) {
       lastProcessedBarcode.current = result.barcode;
-      await searchByBarcode(result.barcode);
+      await runBarcodeLookup(result.barcode);
     }
   };
 
-  // Handle Barcode file upload
   const handleBarcodeFileChange = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (!file) return;
@@ -183,7 +241,7 @@ export const BarcodeScannerModal: React.FC<BarcodeScannerModalProps> = ({
     const result = await analyzeBarcodeImage(file);
     if (result && result.barcode) {
       lastProcessedBarcode.current = result.barcode;
-      await searchByBarcode(result.barcode);
+      await runBarcodeLookup(result.barcode);
     }
 
     if (fileInputRef.current) fileInputRef.current.value = '';
@@ -250,12 +308,14 @@ export const BarcodeScannerModal: React.FC<BarcodeScannerModalProps> = ({
     }
   };
 
-  // Re-capture / retry scanning
   const handleRetryScanning = () => {
     setCapturedImage(null);
     lastProcessedBarcode.current = null;
     setConfirmedProductData(null);
     setJustSavedSuccess(false);
+    setDisposalProduct(null);
+    setDisposalError(null);
+    setDisposalLoading(false);
     resetBarcodeAnalysis();
     resetPriceTagOCR();
     startScan();
@@ -271,11 +331,10 @@ export const BarcodeScannerModal: React.FC<BarcodeScannerModalProps> = ({
 
   if (!isOpen) return null;
 
-  // Active states
-  const isSuccess = !!product;
-  const isProcessing = searchLoading || isAnalyzingBarcode || isAnalyzingPriceTag || isSavingProduct;
+  const isSuccess = disposalMode ? !!disposalProduct : !!product;
+  const isProcessing = searchLoading || disposalLoading || isAnalyzingBarcode || isAnalyzingPriceTag || isSavingProduct;
   const activeBarcode = liveBarcode || imageBarcode;
-  const activeError = scannerError || searchError || imageAnalysisError || priceTagOcrError || saveProductError;
+  const activeError = scannerError || (disposalMode ? disposalError : searchError) || imageAnalysisError || priceTagOcrError || saveProductError;
 
   return (
     <div className="fixed inset-0 z-[100] flex items-end sm:items-center justify-center p-0 sm:p-4">
@@ -294,7 +353,7 @@ export const BarcodeScannerModal: React.FC<BarcodeScannerModalProps> = ({
         animate={{ y: 0, opacity: 1, scale: 1 }}
         exit={{ y: 50, opacity: 0, scale: 0.95 }}
         transition={{ type: 'spring', damping: 26, stiffness: 280 }}
-        className="relative w-full max-w-md bg-white rounded-t-[2.5rem] sm:rounded-[2.5rem] shadow-2xl overflow-hidden flex flex-col z-10 max-h-[94vh]"
+        className="relative w-full max-w-md bg-white rounded-t-[2.5rem] sm:rounded-[2.5rem] shadow-apple-lg border-0 shadow-2xl overflow-hidden flex flex-col z-10 max-h-[94vh]"
       >
         {/* Hidden File Picker Inputs */}
         <input
@@ -313,7 +372,7 @@ export const BarcodeScannerModal: React.FC<BarcodeScannerModalProps> = ({
         />
 
         {/* Header */}
-        <div className="px-6 pt-5 pb-3 flex items-center justify-between border-b border-slate-100">
+        <div className="px-6 pt-5 pb-3 flex items-center justify-between">
           <div className="flex items-center gap-2.5">
             <div className={`w-9 h-9 rounded-xl flex items-center justify-center ${
               scanMode === 'price_tag' ? 'bg-amber-50 text-amber-600' : 'bg-blue-50 text-blue-600'
@@ -444,12 +503,47 @@ export const BarcodeScannerModal: React.FC<BarcodeScannerModalProps> = ({
               />
             )}
 
-            {/* 2. SUCCESS STATE (Product Found or Added) */}
-            {isSuccess && product && !confirmedProductData && (
+            {disposalMode && isSuccess && disposalProduct && (
               <motion.div
                 initial={{ opacity: 0, y: 10 }}
                 animate={{ opacity: 1, y: 0 }}
-                className="bg-emerald-50 border border-emerald-200/90 rounded-2xl p-4 flex flex-col gap-2"
+                className="bg-emerald-50 rounded-3xl p-4 flex flex-col gap-2 shadow-apple-soft border-0"
+              >
+                <div className="flex items-start justify-between gap-3">
+                  <div className="flex items-start gap-2.5 min-w-0">
+                    <CheckCircle2 size={22} className="text-emerald-600 shrink-0 mt-0.5" />
+                    <div className="min-w-0">
+                      <h3 className="text-sm font-bold text-slate-900 leading-tight">
+                        {disposalProduct.name}
+                      </h3>
+                      <div className="flex items-center gap-2 mt-1.5 text-xs text-slate-600 font-mono flex-wrap">
+                        <span className="bg-white px-2.5 py-1 rounded-lg font-bold shadow-apple-soft border-0">
+                          {formatBarcodeDisplay(disposalProduct.internal_code || disposalProduct.barcode)}
+                        </span>
+                        <span className={`px-2.5 py-1 rounded-lg font-sans font-bold text-[0.7rem] ${
+                          disposalProduct.form_stt !== null && disposalProduct.form_stt !== undefined
+                            ? 'bg-rose-600 text-white'
+                            : 'bg-slate-200 text-slate-700'
+                        }`}>
+                          {disposalProduct.form_stt !== null && disposalProduct.form_stt !== undefined
+                            ? `Ô số: ${disposalProduct.form_stt}`
+                            : 'Ngoài danh mục'}
+                        </span>
+                      </div>
+                    </div>
+                  </div>
+                </div>
+                <p className="text-[0.68rem] text-emerald-600 text-center font-medium mt-0.5">
+                  Đang tự động điền sản phẩm...
+                </p>
+              </motion.div>
+            )}
+
+            {!disposalMode && isSuccess && product && !confirmedProductData && (
+              <motion.div
+                initial={{ opacity: 0, y: 10 }}
+                animate={{ opacity: 1, y: 0 }}
+                className="bg-emerald-50 rounded-3xl p-4 flex flex-col gap-2 shadow-apple-soft border-0"
               >
                 <div className="flex items-start justify-between gap-3">
                   <div className="flex items-start gap-2.5">
@@ -459,7 +553,7 @@ export const BarcodeScannerModal: React.FC<BarcodeScannerModalProps> = ({
                         {product.name}
                       </h3>
                       <div className="flex items-center gap-2 mt-1 text-xs text-slate-600 font-mono">
-                        <span className="bg-white px-2 py-0.5 rounded border border-emerald-200 font-bold">
+                        <span className="bg-white px-2.5 py-1 rounded-lg font-bold shadow-apple-soft border-0">
                           {product.barcode}
                         </span>
                         {product.sku && (
@@ -496,12 +590,11 @@ export const BarcodeScannerModal: React.FC<BarcodeScannerModalProps> = ({
               </motion.div>
             )}
 
-            {/* 3. PRODUCT NOT FOUND STATE -> SHOW PRICE TAG SCAN BUTTON */}
             {!isSuccess && activeError && !isProcessing && !confirmedProductData && (
               <motion.div
                 initial={{ opacity: 0, y: 10 }}
                 animate={{ opacity: 1, y: 0 }}
-                className="bg-rose-50 border border-rose-200 rounded-2xl p-4 flex flex-col gap-3"
+                className="bg-rose-50 rounded-3xl p-4 flex flex-col gap-3 shadow-apple-soft border-0"
               >
                 <div className="flex items-start gap-2.5">
                   <AlertCircle size={20} className="text-rose-600 shrink-0 mt-0.5" />
@@ -510,35 +603,65 @@ export const BarcodeScannerModal: React.FC<BarcodeScannerModalProps> = ({
                   </div>
                 </div>
 
-                {/* HIGH-CONVERSION ACTIONS WHEN PRODUCT NOT FOUND */}
                 {activeBarcode && (
-                  <div className="flex flex-col gap-2 pt-1 border-t border-rose-200/60">
-                    <button
-                      onClick={handleStartPriceTagScan}
-                      className="w-full py-3 bg-amber-500 hover:bg-amber-600 active:scale-98 text-white rounded-xl text-xs font-bold flex items-center justify-center gap-2 transition-all shadow-md shadow-amber-500/25 cursor-pointer"
-                    >
-                      <Receipt size={17} />
-                      Quét bảng giá để thêm tự động
-                    </button>
-
-                    <div className="flex gap-2">
-                      {onOpenCreate && (
+                  <div className="flex flex-col gap-2 pt-1 ">
+                    {disposalMode ? (
+                      <div className="flex gap-2">
+                        {onDisposalProductFound && (
+                          <button
+                            type="button"
+                            onClick={() => onDisposalProductFound({
+                              name: activeBarcode,
+                              barcode: activeBarcode,
+                              internal_code: null,
+                              form_stt: null,
+                              source: 'manual'
+                            })}
+                            className="flex-1 py-2.5 bg-slate-800 hover:bg-slate-900 active:scale-98 text-white rounded-xl text-xs font-semibold flex items-center justify-center gap-1 transition-all cursor-pointer"
+                          >
+                            <Plus size={15} />
+                            Dùng mã này
+                          </button>
+                        )}
                         <button
-                          onClick={handleCreateNewManual}
-                          className="flex-1 py-2.5 bg-slate-100 hover:bg-slate-200 active:scale-98 text-slate-700 rounded-xl text-xs font-semibold flex items-center justify-center gap-1 transition-all"
+                          type="button"
+                          onClick={handleRetryScanning}
+                          className="flex-1 py-2.5 bg-rose-100 hover:bg-rose-200 active:scale-98 text-rose-700 rounded-xl text-xs font-semibold flex items-center justify-center gap-1 transition-all cursor-pointer"
                         >
-                          <Plus size={15} />
-                          Nhập tay
+                          <RotateCcw size={15} />
+                          Quét lại
                         </button>
-                      )}
-                      <button
-                        onClick={handleRetryScanning}
-                        className="flex-1 py-2.5 bg-rose-100 hover:bg-rose-200 active:scale-98 text-rose-700 rounded-xl text-xs font-semibold flex items-center justify-center gap-1 transition-all"
-                      >
-                        <RotateCcw size={15} />
-                        Quét lại
-                      </button>
-                    </div>
+                      </div>
+                    ) : (
+                      <>
+                        <button
+                          onClick={handleStartPriceTagScan}
+                          className="w-full py-3 bg-amber-500 hover:bg-amber-600 active:scale-98 text-white rounded-xl text-xs font-bold flex items-center justify-center gap-2 transition-all shadow-md shadow-amber-500/25 cursor-pointer"
+                        >
+                          <Receipt size={17} />
+                          Quét bảng giá để thêm tự động
+                        </button>
+
+                        <div className="flex gap-2">
+                          {onOpenCreate && (
+                            <button
+                              onClick={handleCreateNewManual}
+                              className="flex-1 py-2.5 bg-slate-100 hover:bg-slate-200 active:scale-98 text-slate-700 rounded-xl text-xs font-semibold flex items-center justify-center gap-1 transition-all"
+                            >
+                              <Plus size={15} />
+                              Nhập tay
+                            </button>
+                          )}
+                          <button
+                            onClick={handleRetryScanning}
+                            className="flex-1 py-2.5 bg-rose-100 hover:bg-rose-200 active:scale-98 text-rose-700 rounded-xl text-xs font-semibold flex items-center justify-center gap-1 transition-all"
+                          >
+                            <RotateCcw size={15} />
+                            Quét lại
+                          </button>
+                        </div>
+                      </>
+                    )}
                   </div>
                 )}
               </motion.div>
@@ -563,7 +686,7 @@ export const BarcodeScannerModal: React.FC<BarcodeScannerModalProps> = ({
 
           {/* Action Buttons Toolbar (min 48px touch targets) */}
           {!confirmedProductData && (
-            <div className="w-full flex flex-col gap-2.5 mt-3 pt-2 border-t border-slate-100">
+            <div className="w-full flex flex-col gap-2.5 mt-3 pt-2 ">
               {/* If in Price Tag scan mode */}
               {scanMode === 'price_tag' ? (
                 <div className="w-full flex flex-col gap-2">
@@ -592,7 +715,7 @@ export const BarcodeScannerModal: React.FC<BarcodeScannerModalProps> = ({
                     type="button"
                     onClick={() => priceTagFileInputRef.current?.click()}
                     disabled={isProcessing}
-                    className="w-full h-11 bg-amber-50 hover:bg-amber-100 text-amber-800 border border-amber-200 font-semibold text-xs rounded-xl flex items-center justify-center gap-1.5 transition-colors cursor-pointer"
+                    className="w-full h-11 bg-amber-50 hover:bg-amber-100 text-amber-800 font-semibold text-xs rounded-full flex items-center justify-center gap-1.5 transition-colors cursor-pointer border-0 shadow-apple-soft"
                   >
                     <Upload size={16} />
                     Tải ảnh bảng giá từ máy (JPG, PNG)
@@ -613,7 +736,7 @@ export const BarcodeScannerModal: React.FC<BarcodeScannerModalProps> = ({
                     <button
                       type="button"
                       onClick={stopScan}
-                      className="h-12 px-4 bg-rose-50 hover:bg-rose-100 text-rose-600 border border-rose-200 font-bold rounded-2xl flex items-center justify-center gap-1.5 transition-all cursor-pointer"
+                      className="h-12 px-5 bg-rose-50 hover:bg-rose-100 text-rose-600 font-bold rounded-full flex items-center justify-center gap-1.5 transition-all cursor-pointer border-0 shadow-apple-soft"
                     >
                       <Square size={16} fill="currentColor" />
                       Dừng
@@ -641,7 +764,17 @@ export const BarcodeScannerModal: React.FC<BarcodeScannerModalProps> = ({
                       <RefreshCw size={18} />
                       {capturedImage ? 'Chụp lại' : isSuccess ? 'Quét mã khác' : 'Mở camera quét'}
                     </button>
-                    {isSuccess && onProductFound && product && (
+                    {isSuccess && disposalMode && onDisposalProductFound && disposalProduct && (
+                      <button
+                        type="button"
+                        onClick={() => onDisposalProductFound(disposalProduct)}
+                        className="flex-1 h-12 bg-emerald-600 hover:bg-emerald-700 active:scale-98 text-white font-bold rounded-2xl flex items-center justify-center gap-2 shadow-lg shadow-emerald-500/25 transition-all cursor-pointer"
+                      >
+                        <CheckCircle2 size={18} />
+                        Chọn sản phẩm này
+                      </button>
+                    )}
+                    {isSuccess && !disposalMode && onProductFound && product && (
                       <button
                         type="button"
                         onClick={() => onProductFound(product)}

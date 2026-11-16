@@ -3,8 +3,9 @@ import { motion, AnimatePresence } from 'motion/react';
 import { Header, InputGroup, Card } from '../components/SharedUI';
 import { Product, ExpiryRecord, ProductData } from '../types/product';
 import { formatDate, calculateDestructionDate, getProductRecords } from '../lib/utils';
+import { saveProductExpiry, deleteProductExpiry, getProductExpiryByBarcode } from '../lib/expiryService';
 import { useBarcodeScanner, stopAllCameraMediaTracks } from '../hooks/useBarcodeScanner';
-import { useBarcodeSearch } from '../hooks/useBarcodeSearch';
+import { useBarcodeSearch, invalidateBarcodeCache } from '../hooks/useBarcodeSearch';
 import { useBarcodeFromImage } from '../hooks/useBarcodeFromImage';
 import { usePriceTagOCR } from '../hooks/usePriceTagOCR';
 import { useAddProductToFirestore } from '../hooks/useAddProductToFirestore';
@@ -138,21 +139,36 @@ const ScannerScreen: React.FC<{
     }
   }, [liveBarcode, scanMode]);
 
-  // Central handler when any barcode is identified (live or image capture)
   const handleBarcodeDetected = async (code: string) => {
     stopScan();
     setScannedBarcode(code);
 
-    // 1. Check local products list prop
     const found = products.find(p => p.barcode === code || p.internalCode === code);
     if (found) {
-      setExistingProduct(found);
+      const expRow = await getProductExpiryByBarcode(found.barcode);
+      if (expRow) {
+        const destDate = calculateDestructionDate(expRow.exp_date, expRow.destroy_days);
+        setExistingProduct({
+          ...found,
+          destroyDaysBeforeExpiry: expRow.destroy_days,
+          destructionDate: destDate,
+          expiryRecords: [
+            {
+              id: 'rec_' + found.barcode,
+              expDate: expRow.exp_date,
+              destructionDate: destDate,
+              createdAt: new Date().toISOString()
+            }
+          ]
+        });
+      } else {
+        setExistingProduct(found);
+      }
       setIsAddingNew(false);
       setConfirmedProductData(null);
       return;
     }
 
-    // 2. Query Firestore directly via searchByBarcode
     await searchByBarcode(code);
   };
 
@@ -336,14 +352,16 @@ const ScannerScreen: React.FC<{
     handleResumeScan();
   };
 
-  // Open modal to add record to existing product
   const handleOpenAddRecordToExisting = () => {
     if (!existingProduct) return;
+    const currentRecords = getProductRecords(existingProduct);
+    const currentExp = currentRecords.length > 0 ? currentRecords[0].expDate : '';
     const defaultDays = String(existingProduct.destroyDaysBeforeExpiry || 15);
+    const defaultDest = currentExp ? calculateDestructionDate(currentExp, parseInt(defaultDays) || 0) : '';
     setNewRecordData({
-      expDate: '',
+      expDate: currentExp,
       destroyDays: defaultDays,
-      destructionDate: '',
+      destructionDate: defaultDest,
       quantity: '',
       note: ''
     });
@@ -367,55 +385,58 @@ const ScannerScreen: React.FC<{
     }
 
     const daysBefore = parseInt(newRecordData.destroyDays) || 0;
-    const finalDestructionDate = newRecordData.destructionDate || calculateDestructionDate(newRecordData.expDate, daysBefore);
 
-    const newRecord: ExpiryRecord = {
-      id: 'rec-' + Date.now(),
-      expDate: newRecordData.expDate,
-      destructionDate: finalDestructionDate,
-      quantity: parseInt(newRecordData.quantity) || undefined,
-      note: newRecordData.note.trim() || undefined,
-      createdAt: new Date().toISOString()
-    };
-
-    const currentRecords = getProductRecords(existingProduct);
-    const updatedRecords = [...currentRecords, newRecord].sort(
-      (a, b) => new Date(a.destructionDate).getTime() - new Date(b.destructionDate).getTime()
-    );
-
-    const updatedProduct: Product = {
-      ...existingProduct,
-      destructionDate: updatedRecords[0].destructionDate,
-      expiryRecords: updatedRecords
-    };
-
-    if (onUpdate) {
-      await onUpdate(updatedProduct);
-      setExistingProduct(updatedProduct);
+    try {
+      const updated = await saveProductExpiry(
+        {
+          barcode: existingProduct.barcode,
+          exp_date: newRecordData.expDate,
+          destroy_days: daysBefore
+        },
+        existingProduct
+      );
+      invalidateBarcodeCache(existingProduct.barcode);
+      if (onUpdate) {
+        await onUpdate(updated);
+      }
+      setExistingProduct({
+        ...existingProduct,
+        destroyDaysBeforeExpiry: daysBefore,
+        destructionDate: updated.destructionDate || '',
+        expiryRecords: updated.expiryRecords || []
+      });
+      setIsAddingRecordToExisting(false);
+      alert('Đã lưu hạn sử dụng thành công!');
+    } catch (err: any) {
+      console.error('Error saving expiry record in ScannerScreen:', err);
+      alert('Lỗi khi lưu hạn sử dụng: ' + (err.message || 'Không thể lưu đợt HSD'));
     }
-
-    setIsAddingRecordToExisting(false);
   };
 
-  const handleDeleteRecord = async (recordId: string) => {
+  const handleDeleteRecord = async (_recordId: string) => {
     if (!existingProduct) return;
-    if (!confirm('Xóa record hạn này?')) return;
+    if (!confirm('Xóa hạn sử dụng của sản phẩm này?')) return;
 
-    const currentRecords = getProductRecords(existingProduct);
-    const updated = currentRecords.filter(r => r.id !== recordId);
-    const updatedProduct: Product = {
-      ...existingProduct,
-      destructionDate: updated.length > 0 ? updated[0].destructionDate : '',
-      expiryRecords: updated
-    };
-
-    if (onUpdate) {
-      await onUpdate(updatedProduct);
+    try {
+      await deleteProductExpiry(existingProduct.barcode, existingProduct.id);
+      invalidateBarcodeCache(existingProduct.barcode);
+      const updatedProduct: Product = {
+        ...existingProduct,
+        destructionDate: '',
+        expiryRecords: [],
+        updatedAt: new Date().toISOString()
+      };
+      if (onUpdate) {
+        await onUpdate(updatedProduct);
+      }
       setExistingProduct(updatedProduct);
+    } catch (err: any) {
+      console.error('Error deleting record in ScannerScreen:', err);
+      alert('Lỗi khi xóa record: ' + (err.message || 'Lỗi'));
     }
   };
 
-  const inputClass = "w-full max-w-full box-border block p-3.5 bg-slate-50 border border-slate-200 rounded-2xl text-[0.95rem] font-medium text-slate-800 focus:outline-none focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500 transition-all";
+  const inputClass = "w-full max-w-full box-border block p-3.5 bg-slate-100/80 rounded-2xl text-[0.95rem] font-medium text-slate-800 focus:outline-none focus:ring-2 focus:ring-blue-500/20 border-0 transition-all";
 
   const isBusy = searchLoading || isAnalyzingBarcode || isAnalyzingPriceTag || isSavingProduct;
   const activeError = scannerError || imageAnalysisError || priceTagOcrError || saveProductError;
@@ -425,7 +446,7 @@ const ScannerScreen: React.FC<{
       initial={{ opacity: 0, x: 20 }} 
       animate={{ opacity: 1, x: 0 }} 
       exit={{ opacity: 0, x: -20 }} 
-      className="h-full flex flex-col pb-28"
+      className="w-full h-full flex flex-col pb-28"
     >
       <Header 
         title={scanMode === 'price_tag' ? 'QUÉT BẢNG GIÁ (OCR)' : 'QUÉT BARCODE'} 
@@ -442,7 +463,7 @@ const ScannerScreen: React.FC<{
       />
 
       {/* DIRECT SCAN MODE TABS: BARCODE vs BẢNG GIÁ OCR */}
-      <div className="flex bg-slate-100 p-1 rounded-2xl mb-3 border border-slate-200 shrink-0">
+      <div className="flex bg-slate-200/50 backdrop-blur-md p-1.5 rounded-full mb-3 shadow-apple-soft border-0 shrink-0">
         <button
           type="button"
           onClick={() => {
@@ -454,9 +475,9 @@ const ScannerScreen: React.FC<{
               startScan();
             }
           }}
-          className={`flex-1 py-2.5 px-3 rounded-xl font-bold text-xs flex items-center justify-center gap-1.5 transition-all cursor-pointer ${
+          className={`flex-1 py-2.5 px-4 rounded-full font-bold text-xs flex items-center justify-center gap-1.5 transition-all cursor-pointer border-0 ${
             scanMode === 'barcode'
-              ? 'bg-white text-blue-700 shadow-sm'
+              ? 'bg-white text-blue-700 shadow-apple-soft'
               : 'text-slate-600 hover:text-slate-900'
           }`}
         >
@@ -470,10 +491,10 @@ const ScannerScreen: React.FC<{
               handleStartPriceTagScan();
             }
           }}
-          className={`flex-1 py-2.5 px-3 rounded-xl font-bold text-xs flex items-center justify-center gap-1.5 transition-all cursor-pointer ${
+          className={`flex-1 py-2.5 px-4 rounded-full font-bold text-xs flex items-center justify-center gap-1.5 transition-all cursor-pointer border-0 ${
             scanMode === 'price_tag'
-              ? 'bg-amber-500 text-white shadow-sm'
-              : 'text-amber-800 hover:text-amber-900 bg-amber-50/50'
+              ? 'bg-amber-500 text-white shadow-apple-soft'
+              : 'text-amber-800 hover:text-amber-900'
           }`}
         >
           <Receipt size={16} />
@@ -499,7 +520,7 @@ const ScannerScreen: React.FC<{
 
       <div className="flex-1 flex flex-col">
         {/* Camera / Image Viewport */}
-        <div className="relative rounded-[2rem] overflow-hidden bg-slate-950 aspect-[4/3] shadow-lg mb-3 shrink-0">
+        <div className="relative rounded-[2rem] overflow-hidden bg-slate-950 aspect-[4/3] max-h-[50vh] sm:max-h-[55vh] md:max-h-[60vh] w-full shadow-lg mb-3 shrink-0">
           {/* 1. Captured Photo Preview (if captured) */}
           {capturedImage ? (
             <img 
@@ -607,7 +628,7 @@ const ScannerScreen: React.FC<{
 
         {/* Action Controls Toolbar: CHỤP ẢNH / TẢI ẢNH / QUÉT TIẾP */}
         {!confirmedProductData && (
-          <div className="bg-white rounded-2xl p-2.5 border border-slate-200 shadow-sm mb-3">
+          <div className="bg-white/90 backdrop-blur-md rounded-3xl p-3 shadow-apple border-0 mb-3">
             {scanMode === 'price_tag' ? (
               /* PRICE TAG SCANNING CONTROLS */
               <div className="flex flex-col gap-2">
@@ -636,7 +657,7 @@ const ScannerScreen: React.FC<{
                   type="button"
                   onClick={() => priceTagFileInputRef.current?.click()}
                   disabled={isBusy}
-                  className="w-full h-10 bg-amber-50 hover:bg-amber-100 border border-amber-200 text-amber-800 font-semibold text-xs rounded-xl flex items-center justify-center gap-1.5 transition-colors cursor-pointer"
+                  className="w-full h-10 bg-amber-50 hover:bg-amber-100 text-amber-800 font-semibold text-xs rounded-full flex items-center justify-center gap-1.5 transition-colors cursor-pointer border-0 shadow-apple-soft"
                 >
                   <Upload size={15} />
                   Tải ảnh bảng giá từ thư viện (JPG, PNG)
@@ -668,7 +689,7 @@ const ScannerScreen: React.FC<{
                   type="button"
                   onClick={() => fileInputRef.current?.click()}
                   disabled={isBusy}
-                  className="w-full h-10 bg-slate-50 hover:bg-slate-100 border border-slate-200 text-slate-700 font-semibold text-xs rounded-xl flex items-center justify-center gap-1.5 transition-colors cursor-pointer"
+                  className="w-full h-10 bg-slate-100/80 hover:bg-slate-200 text-slate-700 font-semibold text-xs rounded-full flex items-center justify-center gap-1.5 transition-colors cursor-pointer border-0 shadow-apple-soft"
                 >
                   <Upload size={15} />
                   Hoặc tải ảnh mã vạch từ máy (JPG, PNG)
@@ -702,11 +723,11 @@ const ScannerScreen: React.FC<{
 
         {/* Display detected barcode indicator */}
         {scannedBarcode && !confirmedProductData && (
-          <div className="mb-3 px-3.5 py-2 bg-blue-50 border border-blue-200 rounded-xl flex items-center justify-between text-xs">
+          <div className="mb-3 px-4 py-3 bg-blue-50/90 rounded-2xl flex items-center justify-between text-xs shadow-apple-soft border-0">
             <span className="text-blue-700 font-semibold flex items-center gap-1.5">
               <BarcodeIcon size={16} /> Mã đã nhận diện:
             </span>
-            <span className="font-mono font-black text-blue-900 bg-white px-2 py-0.5 rounded border border-blue-200 text-sm">
+            <span className="font-mono font-black text-blue-900 bg-white px-2.5 py-1 rounded-lg text-sm shadow-apple-soft border-0">
               {scannedBarcode}
             </span>
           </div>
@@ -739,28 +760,28 @@ const ScannerScreen: React.FC<{
                 </div>
                 
                 <div className="space-y-2.5">
-                  <div className="flex justify-between items-center py-1 border-b border-slate-100">
+                  <div className="flex justify-between items-center py-1 ">
                     <span className="text-[0.8rem] text-slate-500 font-bold uppercase">Barcode</span>
                     <span className="font-mono font-bold text-slate-800">{existingProduct.barcode}</span>
                   </div>
-                  <div className="flex justify-between items-center py-1 border-b border-slate-100">
+                  <div className="flex justify-between items-center py-1 ">
                     <span className="text-[0.8rem] text-slate-500 font-bold uppercase">Tên sản phẩm</span>
                     <span className="font-bold text-slate-800 text-right max-w-[200px]">{existingProduct.name}</span>
                   </div>
                   {existingProduct.internalCode && (
-                    <div className="flex justify-between items-center py-1 border-b border-slate-100">
+                    <div className="flex justify-between items-center py-1 ">
                       <span className="text-[0.8rem] text-slate-500 font-bold uppercase">Mã nội bộ</span>
                       <span className="font-mono font-bold text-indigo-600 bg-indigo-50 px-2 py-0.5 rounded-md">
                         #{existingProduct.internalCode}
                       </span>
                     </div>
                   )}
-                  <div className="flex justify-between items-center py-1 border-b border-slate-100">
+                  <div className="flex justify-between items-center py-1 ">
                     <span className="text-[0.8rem] text-slate-500 font-bold uppercase">Giá bán</span>
                     <span className="font-extrabold text-blue-600 text-lg">{(existingProduct.price || 0).toLocaleString('vi-VN')}đ</span>
                   </div>
                   {existingProduct.destroyDaysBeforeExpiry ? (
-                    <div className="flex justify-between items-center py-1 border-b border-slate-100">
+                    <div className="flex justify-between items-center py-1 ">
                       <span className="text-[0.8rem] text-slate-500 font-bold uppercase">Hủy trước HSD</span>
                       <span className="font-semibold text-slate-700">{existingProduct.destroyDaysBeforeExpiry} ngày</span>
                     </div>
@@ -768,7 +789,7 @@ const ScannerScreen: React.FC<{
                 </div>
 
                 {/* Expiry Records List */}
-                <div className="mt-4 pt-3 border-t border-slate-100">
+                <div className="mt-4 pt-3 ">
                   <div className="flex items-center justify-between mb-2">
                     <span className="text-xs font-bold text-slate-500 uppercase flex items-center gap-1">
                       <Layers size={14} /> Danh sách đợt HSD ({getProductRecords(existingProduct).length})
@@ -783,11 +804,11 @@ const ScannerScreen: React.FC<{
 
                   <div className="space-y-2 max-h-48 overflow-y-auto">
                     {getProductRecords(existingProduct).map(rec => (
-                      <div key={rec.id} className="p-2.5 bg-slate-50 rounded-xl flex items-center justify-between border border-slate-100">
+                      <div key={rec.id} className="p-3 bg-slate-100/70 rounded-2xl flex items-center justify-between border-0 shadow-apple-soft">
                         <div className="text-xs space-y-0.5">
                           <div className="flex items-center gap-2">
                             <span className="font-semibold text-slate-700">HSD: {formatDate(rec.expDate)}</span>
-                            {rec.quantity && <span className="bg-white px-1.5 py-0.5 rounded border border-slate-200 text-slate-600 font-bold">SL: {rec.quantity}</span>}
+                            {rec.quantity && <span className="bg-white px-2 py-0.5 rounded-lg text-slate-600 font-bold border-0 shadow-apple-soft">SL: {rec.quantity}</span>}
                           </div>
                           <div className="text-rose-600 font-bold">Hủy: {formatDate(rec.destructionDate)}</div>
                           {rec.note && <div className="text-slate-400 italic text-[0.7rem]">{rec.note}</div>}
@@ -843,7 +864,7 @@ const ScannerScreen: React.FC<{
                 </div>
 
                 {/* PROMINENT "QUÉT BẢNG GIÁ" BUTTON */}
-                <div className="mb-4 p-3 bg-amber-50 border-2 border-amber-300 rounded-2xl flex flex-col gap-2">
+                <div className="mb-4 p-4 bg-amber-50 rounded-3xl shadow-apple-soft border-0 flex flex-col gap-2">
                   <div className="flex items-center gap-2 text-amber-800 font-bold text-xs">
                     <Sparkles size={16} className="text-amber-600 shrink-0" />
                     Tự động nhập thông tin từ tem bảng giá
@@ -859,7 +880,7 @@ const ScannerScreen: React.FC<{
                 </div>
 
                 {/* MANUAL FALLBACK FORM */}
-                <div className="space-y-3.5 pt-2 border-t border-slate-100">
+                <div className="space-y-3.5 pt-2 ">
                   <div className="text-xs font-bold text-slate-600 uppercase">
                     Hoặc nhập thông tin thủ công:
                   </div>
@@ -907,7 +928,7 @@ const ScannerScreen: React.FC<{
                     </InputGroup>
                   </div>
 
-                  <div className="p-3 bg-blue-50/60 rounded-2xl border border-blue-100 space-y-3">
+                  <div className="p-4 bg-blue-50/80 rounded-3xl border-0 shadow-apple-soft space-y-3">
                     <span className="text-xs font-bold text-blue-800 flex items-center gap-1.5">
                       <Calendar size={15} /> Thêm HSD đợt đầu (Tùy chọn)
                     </span>
@@ -963,7 +984,7 @@ const ScannerScreen: React.FC<{
                     </div>
 
                     {formData.expDate && (
-                      <div className="p-2.5 bg-rose-50 border border-rose-100 rounded-xl flex justify-between items-center text-xs">
+                      <div className="p-3 bg-rose-50 rounded-2xl flex justify-between items-center text-xs border-0 shadow-apple-soft">
                         <span className="font-semibold text-rose-700">Ngày phải hủy:</span>
                         <span className="font-mono font-bold text-rose-600 text-sm">
                           {formatDate(formData.destructionDate)}
@@ -1021,7 +1042,7 @@ const ScannerScreen: React.FC<{
                 exit={{ opacity: 0, scale: 0.95 }}
                 className="bg-white rounded-3xl p-5 max-w-sm w-full shadow-2xl"
               >
-                <div className="flex justify-between items-center mb-4 border-b border-slate-100 pb-3">
+                <div className="flex justify-between items-center mb-4  pb-3">
                   <div>
                     <h3 className="font-bold text-slate-800 text-base">Thêm đợt HSD</h3>
                     <p className="text-xs text-slate-400 truncate max-w-[220px]">{existingProduct?.name}</p>
@@ -1041,50 +1062,26 @@ const ScannerScreen: React.FC<{
                     />
                   </InputGroup>
 
-                  <div className="grid grid-cols-2 gap-3">
-                    <InputGroup label="Hủy trước HSD (ngày)">
-                      <input 
-                        type="number" 
-                        inputMode="numeric" 
-                        pattern="[0-9]*"
-                        min="0"
-                        className={inputClass} 
-                        value={newRecordData.destroyDays} 
-                        onChange={e => handleNewRecordExpChange(newRecordData.expDate, e.target.value)} 
-                      />
-                    </InputGroup>
-                    <InputGroup label="Số lượng">
-                      <input 
-                        type="number" 
-                        inputMode="numeric" 
-                        pattern="[0-9]*"
-                        min="0"
-                        placeholder="VD: 5" 
-                        className={inputClass} 
-                        value={newRecordData.quantity} 
-                        onChange={e => setNewRecordData({...newRecordData, quantity: e.target.value})} 
-                      />
-                    </InputGroup>
-                  </div>
+                  <InputGroup label="Số ngày hủy trước HSD">
+                    <input 
+                      type="number" 
+                      inputMode="numeric" 
+                      pattern="[0-9]*"
+                      min="0"
+                      className={inputClass} 
+                      value={newRecordData.destroyDays} 
+                      onChange={e => handleNewRecordExpChange(newRecordData.expDate, e.target.value)} 
+                    />
+                  </InputGroup>
 
                   {newRecordData.expDate && (
-                    <div className="p-3 bg-rose-50 border border-rose-100 rounded-xl flex justify-between items-center text-xs">
+                    <div className="p-3 bg-rose-50 rounded-2xl flex justify-between items-center text-xs border-0 shadow-apple-soft">
                       <span className="font-semibold text-rose-700">Ngày phải hủy:</span>
                       <span className="font-mono font-bold text-rose-600 text-sm">
                         {formatDate(newRecordData.destructionDate)}
                       </span>
                     </div>
                   )}
-
-                  <InputGroup label="Ghi chú">
-                    <input 
-                      type="text" 
-                      placeholder="VD: Kệ ngoài, cận date" 
-                      className={inputClass} 
-                      value={newRecordData.note} 
-                      onChange={e => setNewRecordData({...newRecordData, note: e.target.value})} 
-                    />
-                  </InputGroup>
 
                   <div className="flex gap-3 pt-2">
                     <button 

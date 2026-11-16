@@ -117,15 +117,18 @@ export const LoginScreen: React.FC<LoginModalProps> = ({ onSuccess }) => {
         initial={{ opacity: 0, scale: 0.98, y: 12 }}
         animate={{ opacity: 1, scale: 1, y: 0 }}
         transition={{ duration: 0.25, ease: 'easeOut' }}
-        className="w-full max-w-sm relative z-10 bg-white/75 backdrop-blur-2xl border border-white/80 rounded-3xl p-6 sm:p-7 shadow-[0_8px_32px_0_rgba(15,23,42,0.06)]"
+        className="w-full max-w-sm relative z-10 bg-white/90 backdrop-blur-xl rounded-3xl p-7 shadow-apple-lg border-0"
       >
         {/* Header minimal */}
         <div className="text-center mb-6">
-          <div className="w-12 h-12 mx-auto mb-3 rounded-2xl bg-slate-900 text-white flex items-center justify-center shadow-sm">
-            <UserCheck size={22} strokeWidth={2} />
+          <div className="w-16 h-16 mx-auto mb-3 rounded-2xl bg-white shadow-apple p-1.5 flex items-center justify-center">
+            <img 
+              src="/assets/aistudio/image_c37e9c28.png" 
+              alt="Logo Quản Lý Hàng" 
+              className="w-full h-full object-contain"
+            />
           </div>
-          <h1 className="text-xl font-bold text-slate-800 tracking-tight">Đăng nhập</h1>
-          <p className="text-xs text-slate-400 mt-0.5">Chọn tài khoản của bạn để tiếp tục</p>
+          <h1 className="text-xl font-bold text-slate-800 tracking-tight">Quản Lý Hàng</h1>
         </div>
 
         {/* Danh sách Profile: Công Hào, Các tài khoản đã tạo & Người dùng khác */}
@@ -143,8 +146,8 @@ export const LoginScreen: React.FC<LoginModalProps> = ({ onSuccess }) => {
                   onClick={() => handleSelectProfile(p.key)}
                   className={`py-3 px-4 rounded-2xl border text-left flex items-center justify-between transition-all duration-150 active:scale-[0.98] cursor-pointer ${
                     isSelected 
-                      ? 'bg-white border-slate-400 shadow-sm text-slate-900 ring-1 ring-slate-900/10' 
-                      : 'bg-white/50 border-slate-200/70 text-slate-600 hover:bg-white/80 hover:border-slate-300'
+                      ? 'bg-white shadow-apple text-slate-900 border-0' 
+                      : 'bg-slate-100/70 hover:bg-white text-slate-600 shadow-apple-soft border-0'
                   }`}
                 >
                   <div className="flex items-center gap-3 min-w-0">
@@ -172,8 +175,8 @@ export const LoginScreen: React.FC<LoginModalProps> = ({ onSuccess }) => {
               onClick={handleSelectOther}
               className={`py-3 px-4 rounded-2xl border border-dashed text-left flex items-center justify-between transition-all duration-150 active:scale-[0.98] cursor-pointer ${
                 isOtherSelected 
-                  ? 'bg-blue-50/80 border-blue-400 shadow-sm text-blue-950 ring-1 ring-blue-500/20' 
-                  : 'bg-slate-50/70 border-slate-300 text-slate-700 hover:bg-white hover:border-blue-400'
+                  ? 'bg-blue-50/90 shadow-apple text-blue-950 border-0' 
+                  : 'bg-slate-100/70 hover:bg-white text-slate-700 shadow-apple-soft border-0'
               }`}
             >
               <div className="flex items-center gap-3 min-w-0">
@@ -185,9 +188,6 @@ export const LoginScreen: React.FC<LoginModalProps> = ({ onSuccess }) => {
                 <div>
                   <span className={`text-[0.9rem] font-bold block leading-tight ${isOtherSelected ? 'text-blue-900' : 'text-slate-800'}`}>
                     Người dùng khác
-                  </span>
-                  <span className="text-[0.68rem] text-slate-500 font-medium block">
-                    + Thêm tài khoản mới vào hệ thống
                   </span>
                 </div>
               </div>
@@ -215,7 +215,7 @@ export const LoginScreen: React.FC<LoginModalProps> = ({ onSuccess }) => {
                   onChange={(e) => setNewUserName(e.target.value)}
                   placeholder="Nhập họ và tên của bạn..."
                   autoFocus
-                  className="w-full py-3 px-3.5 bg-white border border-blue-200 rounded-2xl text-slate-800 placeholder-slate-400 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500 transition-all box-border font-medium"
+                  className="w-full py-3.5 px-4 bg-slate-100/80 rounded-2xl text-slate-800 placeholder-slate-400 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500/20 border-0 transition-all box-border font-medium"
                 />
               </div>
 
@@ -229,7 +229,7 @@ export const LoginScreen: React.FC<LoginModalProps> = ({ onSuccess }) => {
                     value={newPassword}
                     onChange={(e) => setNewPassword(e.target.value)}
                     placeholder="Tạo mật khẩu đăng nhập..."
-                    className="w-full py-3 pl-3.5 pr-10 bg-white border border-blue-200 rounded-2xl text-slate-800 placeholder-slate-400 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500 transition-all box-border font-medium"
+                    className="w-full py-3.5 pl-4 pr-10 bg-slate-100/80 rounded-2xl text-slate-800 placeholder-slate-400 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500/20 border-0 transition-all box-border font-medium"
                   />
                   <button
                     type="button"
@@ -260,7 +260,7 @@ export const LoginScreen: React.FC<LoginModalProps> = ({ onSuccess }) => {
                   onChange={(e) => setPassword(e.target.value)}
                   placeholder="Nhập mật khẩu..."
                   autoFocus
-                  className="w-full py-3 pl-3.5 pr-10 bg-white/70 border border-slate-200/80 rounded-2xl text-slate-800 placeholder-slate-400 text-sm focus:outline-none focus:ring-2 focus:ring-slate-900/10 focus:border-slate-400 focus:bg-white transition-all box-border font-medium"
+                  className="w-full py-3.5 pl-4 pr-10 bg-slate-100/80 rounded-2xl text-slate-800 placeholder-slate-400 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500/20 border-0 transition-all box-border font-medium"
                 />
                 <button
                   type="button"
@@ -291,7 +291,7 @@ export const LoginScreen: React.FC<LoginModalProps> = ({ onSuccess }) => {
           <button
             type="submit"
             disabled={isSubmitting}
-            className={`w-full py-3.5 text-white font-semibold text-sm rounded-2xl shadow-sm flex items-center justify-center gap-2 transition-all cursor-pointer disabled:opacity-60 active:scale-[0.98] ${
+            className={`w-full py-3.5 text-white font-semibold text-sm rounded-full shadow-apple flex items-center justify-center gap-2 transition-all cursor-pointer disabled:opacity-60 active:scale-[0.98] border-0 ${
               isOtherSelected 
                 ? 'bg-blue-600 hover:bg-blue-700 shadow-blue-500/20' 
                 : 'bg-slate-900 hover:bg-slate-800'
@@ -313,12 +313,7 @@ export const LoginScreen: React.FC<LoginModalProps> = ({ onSuccess }) => {
           </button>
         </form>
 
-        <div className="mt-5 pt-4 border-t border-slate-200/60 text-center">
-          <span className="text-[0.7rem] text-slate-400 flex items-center justify-center gap-1.5">
-            <span className="w-1.5 h-1.5 rounded-full bg-emerald-500 inline-block"></span>
-            Cloud Firestore Realtime
-          </span>
-        </div>
+
       </motion.div>
     </div>
   );

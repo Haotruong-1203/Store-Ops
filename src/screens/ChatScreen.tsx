@@ -4,6 +4,7 @@ import { Header, InputGroup } from '../components/SharedUI';
 import { ChatMessage, subscribeMessages, sendMessage, revokeMessage, togglePinMessage } from '../lib/chatService';
 import { Send, ImagePlus, Trash2, Package, Search, X, Reply, Pin } from 'lucide-react';
 import { Product } from '../lib/db';
+import { useProductSearch } from '../hooks/useProductSearch';
 
 interface ChatScreenProps {
   onBack: () => void;
@@ -18,11 +19,16 @@ export const ChatScreen: React.FC<ChatScreenProps> = ({ onBack, currentUser, pro
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
-  // Product popup state
   const [replyingToMessage, setReplyingToMessage] = useState<ChatMessage | null>(null);
   const [activeMessageId, setActiveMessageId] = useState<string | null>(null);
   const [isProductPopupOpen, setIsProductPopupOpen] = useState(false);
   const [productSearch, setProductSearch] = useState('');
+
+  const {
+    setSearchTerm: setServerSearchTerm,
+    results: serverSearchResults,
+    loading: loadingServerSearch
+  } = useProductSearch(250);
 
   useEffect(() => {
     const unsubscribe = subscribeMessages((msgs) => {
@@ -48,21 +54,41 @@ export const ChatScreen: React.FC<ChatScreenProps> = ({ onBack, currentUser, pro
 
   const handleSend = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!newMessage.trim() || isSending) return;
+    const textToSend = newMessage.trim();
+    if (!textToSend || isSending) return;
 
+    const replyData = replyingToMessage ? {
+      id: replyingToMessage.id || '',
+      senderName: replyingToMessage.senderName,
+      text: replyingToMessage.text,
+      isImage: !!replyingToMessage.imageUrl,
+      isProduct: !!replyingToMessage.productInfo
+    } : undefined;
+
+    const tempId = 'temp_' + Date.now();
+    const optimisticMsg: ChatMessage = {
+      id: tempId,
+      senderId: currentUser.username,
+      senderName: getSenderName(),
+      text: textToSend,
+      replyTo: replyData,
+      isPinned: false,
+      createdAt: new Date()
+    };
+
+    setMessages(prev => [...prev, optimisticMsg]);
+    setNewMessage('');
+    setReplyingToMessage(null);
     setIsSending(true);
+
     try {
-      const replyData = replyingToMessage ? {
-        id: replyingToMessage.id || '',
-        senderName: replyingToMessage.senderName,
-        text: replyingToMessage.text,
-        isImage: !!replyingToMessage.imageUrl,
-        isProduct: !!replyingToMessage.productInfo
-      } : undefined;
-      await sendMessage(currentUser.username, getSenderName(), newMessage, undefined, undefined, replyData);
-      setNewMessage('');
-      setReplyingToMessage(null);
+      const realMsg = await sendMessage(currentUser.username, getSenderName(), textToSend, undefined, undefined, replyData);
+      if (realMsg) {
+        setMessages(prev => prev.map(m => m.id === tempId ? realMsg : m));
+      }
     } catch (error) {
+      setMessages(prev => prev.filter(m => m.id !== tempId));
+      setNewMessage(textToSend);
       alert("Không thể gửi tin nhắn. Vui lòng thử lại!");
     } finally {
       setIsSending(false);
@@ -70,32 +96,56 @@ export const ChatScreen: React.FC<ChatScreenProps> = ({ onBack, currentUser, pro
   };
 
   const handleSendProduct = async (product: Product) => {
+    if (isSending) return;
+
+    const replyData = replyingToMessage ? {
+      id: replyingToMessage.id || '',
+      senderName: replyingToMessage.senderName,
+      text: replyingToMessage.text,
+      isImage: !!replyingToMessage.imageUrl,
+      isProduct: !!replyingToMessage.productInfo
+    } : undefined;
+
+    const productPayload = {
+      name: product.name,
+      barcode: product.barcode,
+      ...(product.internalCode ? { internalCode: product.internalCode } : {}),
+      ...(product.price !== undefined ? { price: product.price } : {})
+    };
+
+    const tempId = 'temp_' + Date.now();
+    const optimisticMsg: ChatMessage = {
+      id: tempId,
+      senderId: currentUser.username,
+      senderName: getSenderName(),
+      text: '',
+      productInfo: productPayload,
+      replyTo: replyData,
+      isPinned: false,
+      createdAt: new Date()
+    };
+
+    setMessages(prev => [...prev, optimisticMsg]);
+    setIsProductPopupOpen(false);
+    setProductSearch('');
+    setServerSearchTerm('');
+    setReplyingToMessage(null);
     setIsSending(true);
+
     try {
-      const replyData = replyingToMessage ? {
-        id: replyingToMessage.id || '',
-        senderName: replyingToMessage.senderName,
-        text: replyingToMessage.text,
-        isImage: !!replyingToMessage.imageUrl,
-        isProduct: !!replyingToMessage.productInfo
-      } : undefined;
-      await sendMessage(
+      const realMsg = await sendMessage(
         currentUser.username, 
         getSenderName(), 
         '', 
         undefined, 
-        {
-          name: product.name,
-          barcode: product.barcode,
-          internalCode: product.internalCode,
-          price: product.price
-        },
+        productPayload,
         replyData
       );
-      setIsProductPopupOpen(false);
-      setProductSearch('');
-      setReplyingToMessage(null);
+      if (realMsg) {
+        setMessages(prev => prev.map(m => m.id === tempId ? realMsg : m));
+      }
     } catch (error) {
+      setMessages(prev => prev.filter(m => m.id !== tempId));
       alert("Lỗi khi gửi thông tin sản phẩm.");
     } finally {
       setIsSending(false);
@@ -145,9 +195,10 @@ export const ChatScreen: React.FC<ChatScreenProps> = ({ onBack, currentUser, pro
 
   const handleImageUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
-    if (!file) return;
+    if (!file || isSending) return;
 
     setIsSending(true);
+    let tempId = '';
     try {
       const base64Image = await compressImage(file);
       const replyData = replyingToMessage ? {
@@ -157,10 +208,29 @@ export const ChatScreen: React.FC<ChatScreenProps> = ({ onBack, currentUser, pro
         isImage: !!replyingToMessage.imageUrl,
         isProduct: !!replyingToMessage.productInfo
       } : undefined;
-      await sendMessage(currentUser.username, getSenderName(), '', base64Image, undefined, replyData);
+
+      tempId = 'temp_' + Date.now();
+      const optimisticMsg: ChatMessage = {
+        id: tempId,
+        senderId: currentUser.username,
+        senderName: getSenderName(),
+        text: '',
+        imageUrl: base64Image,
+        replyTo: replyData,
+        isPinned: false,
+        createdAt: new Date()
+      };
+      setMessages(prev => [...prev, optimisticMsg]);
       setReplyingToMessage(null);
+
+      const realMsg = await sendMessage(currentUser.username, getSenderName(), '', base64Image, undefined, replyData);
+      if (realMsg) {
+        setMessages(prev => prev.map(m => m.id === tempId ? realMsg : m));
+      }
     } catch (error) {
-      console.error(error);
+      if (tempId) {
+        setMessages(prev => prev.filter(m => m.id !== tempId));
+      }
       alert("Lỗi khi tải ảnh lên.");
     } finally {
       setIsSending(false);
@@ -172,6 +242,7 @@ export const ChatScreen: React.FC<ChatScreenProps> = ({ onBack, currentUser, pro
     if (!id) return;
     if (confirm('Bạn có chắc muốn thu hồi tin nhắn này?')) {
       try {
+        setMessages(prev => prev.map(m => m.id === id ? { ...m, isDeleted: true } : m));
         await revokeMessage(id);
       } catch (error) {
          alert("Lỗi khi thu hồi tin nhắn.");
@@ -207,15 +278,26 @@ export const ChatScreen: React.FC<ChatScreenProps> = ({ onBack, currentUser, pro
     if (!productSearch.trim()) return [];
     const searchLower = productSearch.toLowerCase();
     
-    return products.filter(p => {
+    const localMatches = (products || []).filter(p => {
       const matchName = p.name.toLowerCase().includes(searchLower);
       const matchBarcode = p.barcode.includes(searchLower);
       const matchInternal = p.internalCode?.toLowerCase().includes(searchLower);
       const isSuffixMatch = /^\d+$/.test(searchLower) && p.barcode.endsWith(searchLower);
       
       return matchName || matchBarcode || matchInternal || isSuffixMatch;
-    }).slice(0, 10); // Show max 10 results
-  }, [productSearch, products]);
+    });
+
+    const combined = [...localMatches];
+    const seen = new Set(localMatches.map(p => p.id || p.barcode));
+    for (const p of serverSearchResults) {
+      const key = p.id || p.barcode;
+      if (!seen.has(key)) {
+        seen.add(key);
+        combined.push(p);
+      }
+    }
+    return combined.slice(0, 15);
+  }, [productSearch, products, serverSearchResults]);
 
   return (
     <motion.div 
@@ -287,7 +369,16 @@ export const ChatScreen: React.FC<ChatScreenProps> = ({ onBack, currentUser, pro
           </div>
         ) : (
           messages.map((msg) => {
-            const isMe = msg.senderId === currentUser.username;
+            const isMe = 
+              msg.senderId === currentUser.username ||
+              msg.senderId === currentUser.name ||
+              msg.senderName?.trim().toLowerCase() === currentUser.name?.trim().toLowerCase() ||
+              (currentUser.username === 'conghao' && (
+                msg.senderId === 'conghao' || 
+                msg.senderName?.trim().toLowerCase() === 'công hào' || 
+                msg.senderName?.trim().toLowerCase().includes('admin') ||
+                msg.senderName === 'Thông báo hệ thống'
+              ));
             
             const displaySenderName = (msg.senderId === 'conghao' && (msg.senderName.toLowerCase().includes('admin') || msg.senderName.toLowerCase() === 'thông báo hệ thống')) 
               ? 'Thông báo hệ thống' 
@@ -312,7 +403,7 @@ export const ChatScreen: React.FC<ChatScreenProps> = ({ onBack, currentUser, pro
                   </div>
                   
                   {msg.isDeleted ? (
-                     <div className="px-4 py-2.5 rounded-[1.2rem] shadow-sm text-[0.9rem] italic bg-white border border-slate-200 text-slate-400 rounded-tl-sm">
+                     <div className="px-4 py-3 rounded-2xl shadow-apple-soft text-[0.9rem] italic bg-white/90 text-slate-400 border-0">
                        Tin nhắn đã bị thu hồi
                      </div>
                   ) : (
@@ -375,8 +466,8 @@ export const ChatScreen: React.FC<ChatScreenProps> = ({ onBack, currentUser, pro
                         }}
                         className={`px-4 py-2.5 rounded-[1.2rem] shadow-sm text-[0.95rem] active:scale-[0.98] transition-transform ${
                           isMe 
-                            ? 'bg-blue-600 text-white rounded-tr-sm' 
-                            : 'bg-white border border-slate-200 text-slate-700 rounded-tl-sm'
+                            ? 'bg-blue-600 text-white shadow-apple-soft border-0' 
+                            : 'bg-white/95 backdrop-blur-md shadow-apple-soft text-slate-700 border-0'
                         }`}>
                         {msg.isPinned && (
                           <div className={`flex items-center gap-1.5 text-[0.68rem] font-bold mb-1.5 px-2 py-0.5 rounded-lg w-fit ${
@@ -430,9 +521,9 @@ export const ChatScreen: React.FC<ChatScreenProps> = ({ onBack, currentUser, pro
         <div ref={messagesEndRef} />
       </div>
 
-      <div className="shrink-0 p-3 bg-white border-t border-slate-200 z-20 pb-safe">
+      <div className="shrink-0 p-3 bg-white/90 backdrop-blur-md shadow-apple z-20 pb-safe border-0">
         {replyingToMessage && (
-          <div className="mb-2 bg-slate-50 rounded-2xl p-3 border border-slate-200 flex items-start justify-between">
+          <div className="mb-2 bg-slate-100/90 rounded-2xl p-3 shadow-apple-soft border-0 flex items-start justify-between">
             <div className="flex-1 min-w-0 border-l-4 border-blue-500 pl-3">
               <div className="text-xs font-bold text-blue-600 mb-0.5 uppercase tracking-wide">
                 Trả lời {replyingToMessage.senderName}
@@ -452,7 +543,7 @@ export const ChatScreen: React.FC<ChatScreenProps> = ({ onBack, currentUser, pro
         )}
         <form 
           onSubmit={handleSend} 
-          className="flex items-center gap-2 bg-slate-100 p-1.5 pl-2 rounded-full shadow-inner border border-slate-200"
+          className="flex items-center gap-2 bg-slate-100/90 p-1.5 pl-3 rounded-full shadow-apple-soft border-0"
         >
           <input 
             type="file" 
@@ -513,9 +604,9 @@ export const ChatScreen: React.FC<ChatScreenProps> = ({ onBack, currentUser, pro
               animate={{ y: 0 }}
               exit={{ y: "100%" }}
               transition={{ type: "spring", damping: 25, stiffness: 300 }}
-              className="bg-white w-full sm:w-[28rem] h-[85%] sm:h-[80%] sm:rounded-[2rem] rounded-t-[2rem] flex flex-col overflow-hidden shadow-2xl border border-slate-200/50"
+              className="bg-white/95 backdrop-blur-xl w-full sm:w-[28rem] h-[85%] sm:h-[80%] sm:rounded-[2.5rem] rounded-t-[2.5rem] flex flex-col overflow-hidden shadow-apple-lg border-0"
             >
-              <div className="p-4 border-b border-slate-100 flex items-center justify-between shrink-0 bg-slate-50/50">
+              <div className="p-4  flex items-center justify-between shrink-0 bg-slate-50/50">
                  <h2 className="font-bold text-slate-800 text-lg flex items-center gap-2">
                    <Package className="text-blue-500" /> Chọn sản phẩm
                  </h2>
@@ -535,7 +626,10 @@ export const ChatScreen: React.FC<ChatScreenProps> = ({ onBack, currentUser, pro
                   <input
                     type="text"
                     value={productSearch}
-                    onChange={(e) => setProductSearch(e.target.value)}
+                    onChange={(e) => {
+                      setProductSearch(e.target.value);
+                      setServerSearchTerm(e.target.value);
+                    }}
                     placeholder="Tìm tên, barcode, mã nội bộ..."
                     className="w-full bg-slate-100/80 border-none text-slate-800 rounded-2xl pl-10 pr-4 py-3 focus:outline-none focus:ring-2 focus:ring-blue-500/20 transition-all placeholder:text-slate-400"
                     autoFocus

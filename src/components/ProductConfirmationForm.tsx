@@ -72,10 +72,8 @@ export const ProductConfirmationForm: React.FC<ProductConfirmationFormProps> = (
       className="w-full flex flex-col gap-3.5"
     >
       {/* OCR Accuracy Badge & Notice */}
-      <div className={`p-3 rounded-2xl flex items-center justify-between border ${
-        isLowConfidence 
-          ? 'bg-amber-50 border-amber-200 text-amber-900' 
-          : 'bg-emerald-50 border-emerald-200 text-emerald-900'
+      <div className={`p-3.5 rounded-2xl flex items-center justify-between shadow-apple-soft border-0 ${
+        isLowConfidence ? 'bg-amber-50 text-amber-900' : 'bg-emerald-50 text-emerald-900'
       }`}>
         <div className="flex items-center gap-2">
           {isLowConfidence ? (
@@ -89,7 +87,7 @@ export const ProductConfirmationForm: React.FC<ProductConfirmationFormProps> = (
               : 'Độ chính xác OCR: ' + confidence + '%'}
           </span>
         </div>
-        <span className="text-[0.68rem] font-semibold uppercase px-2 py-0.5 rounded-full bg-white/80 border border-current">
+        <span className="text-[0.68rem] font-semibold uppercase px-2.5 py-1 rounded-full bg-white/90 shadow-apple-soft border-0">
           Bảng giá
         </span>
       </div>
@@ -105,7 +103,7 @@ export const ProductConfirmationForm: React.FC<ProductConfirmationFormProps> = (
             value={formData.name}
             onChange={(e) => setFormData({ ...formData, name: e.target.value })}
             placeholder="VD: Thanh Surimi càng cua hoàng đế"
-            className="w-full p-3 bg-slate-50 border border-slate-200 rounded-xl text-sm font-semibold text-slate-800 focus:outline-none focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500"
+            className="w-full p-3.5 bg-slate-100/80 border-0 rounded-2xl text-sm font-semibold text-slate-800 focus:outline-none focus:ring-2 focus:ring-blue-500/20"
           />
           {validationErrors.name && (
             <p className="text-[0.7rem] text-rose-600 font-medium">{validationErrors.name}</p>
@@ -124,7 +122,7 @@ export const ProductConfirmationForm: React.FC<ProductConfirmationFormProps> = (
               value={formData.price || ''}
               onChange={(e) => setFormData({ ...formData, price: parseInt(e.target.value) || 0 })}
               placeholder="VD: 19000"
-              className="w-full p-3 bg-slate-50 border border-slate-200 rounded-xl text-sm font-bold text-emerald-700 focus:outline-none focus:ring-2 focus:ring-emerald-500/20 focus:border-emerald-500"
+              className="w-full p-3.5 bg-slate-100/80 border-0 rounded-2xl text-sm font-bold text-emerald-700 focus:outline-none focus:ring-2 focus:ring-emerald-500/20"
             />
             {validationErrors.price && (
               <p className="text-[0.7rem] text-rose-600 font-medium">{validationErrors.price}</p>
@@ -142,7 +140,7 @@ export const ProductConfirmationForm: React.FC<ProductConfirmationFormProps> = (
                 value={formData.daysBeforeExpiry}
                 onChange={(e) => setFormData({ ...formData, daysBeforeExpiry: parseInt(e.target.value) || 0 })}
                 placeholder="2"
-                className="w-full p-3 bg-slate-50 border border-slate-200 rounded-xl text-sm font-bold text-slate-800 focus:outline-none focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500"
+                className="w-full p-3.5 bg-slate-100/80 border-0 rounded-2xl text-sm font-bold text-slate-800 focus:outline-none focus:ring-2 focus:ring-blue-500/20"
               />
               <span className="absolute right-3 top-3.5 text-xs font-semibold text-slate-400">
                 ngày
@@ -164,7 +162,7 @@ export const ProductConfirmationForm: React.FC<ProductConfirmationFormProps> = (
               type="text"
               value={formData.barcode}
               readOnly
-              className="w-full p-3 bg-emerald-50/80 border border-emerald-200 rounded-xl text-xs font-mono font-bold text-emerald-800 cursor-not-allowed"
+              className="w-full p-3.5 bg-emerald-50/90 border-0 rounded-2xl text-xs font-mono font-bold text-emerald-800 cursor-not-allowed shadow-apple-soft"
             />
             {validationErrors.barcode && (
               <p className="text-[0.7rem] text-rose-600 font-medium">{validationErrors.barcode}</p>
@@ -180,7 +178,7 @@ export const ProductConfirmationForm: React.FC<ProductConfirmationFormProps> = (
               value={formData.internalCode}
               onChange={(e) => setFormData({ ...formData, internalCode: e.target.value })}
               placeholder="VD: 240810"
-              className="w-full p-3 bg-slate-50 border border-slate-200 rounded-xl text-xs font-mono font-bold text-indigo-700 focus:outline-none focus:ring-2 focus:ring-indigo-500/20 focus:border-indigo-500"
+              className="w-full p-3.5 bg-slate-100/80 border-0 rounded-2xl text-xs font-mono font-bold text-indigo-700 focus:outline-none focus:ring-2 focus:ring-indigo-500/20"
             />
           </div>
         </div>
@@ -191,7 +189,7 @@ export const ProductConfirmationForm: React.FC<ProductConfirmationFormProps> = (
             type="button"
             onClick={onCancel}
             disabled={isSaving}
-            className="flex-1 h-12 bg-slate-100 hover:bg-slate-200 active:scale-98 text-slate-700 font-bold rounded-2xl flex items-center justify-center gap-1.5 transition-all cursor-pointer text-xs"
+            className="flex-1 h-12 bg-slate-100 hover:bg-slate-200 active:scale-98 text-slate-700 font-bold rounded-full flex items-center justify-center gap-1.5 transition-all cursor-pointer text-xs border-0"
           >
             <RotateCcw size={16} />
             Quét lại
@@ -200,7 +198,7 @@ export const ProductConfirmationForm: React.FC<ProductConfirmationFormProps> = (
           <button
             type="submit"
             disabled={isSaving}
-            className="flex-1 h-12 bg-emerald-600 hover:bg-emerald-700 active:scale-98 disabled:opacity-50 text-white font-bold rounded-2xl flex items-center justify-center gap-2 shadow-lg shadow-emerald-600/30 transition-all cursor-pointer text-sm"
+            className="flex-1 h-12 bg-emerald-600 hover:bg-emerald-700 active:scale-98 disabled:opacity-50 text-white font-bold rounded-full flex items-center justify-center gap-2 shadow-apple transition-all cursor-pointer text-sm border-0"
           >
             {isSaving ? (
               <>

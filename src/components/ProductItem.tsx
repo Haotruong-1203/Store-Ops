@@ -38,26 +38,26 @@ export const ProductItem: React.FC<ProductItemProps> = React.memo(({
   const urgentStatus = getStatus(urgentDate);
 
   return (
-    <div className="bg-white border border-zinc-200/80 rounded-2xl p-4 flex flex-col justify-between transition-colors hover:border-zinc-300">
+    <div className="bg-white/95 backdrop-blur-md rounded-3xl p-5 sm:p-6 flex flex-col justify-between shadow-apple-soft hover:shadow-apple transition-all border-0">
       <div>
-        <div className="flex justify-between items-start gap-3 mb-2">
+        <div className="flex justify-between items-start gap-3 mb-2.5">
           <div className="flex-1 min-w-0">
-            <h3 className="font-semibold text-zinc-900 text-sm sm:text-base leading-snug line-clamp-2">
+            <h3 className="font-bold text-slate-900 text-sm sm:text-base leading-snug line-clamp-2">
               {product.name}
             </h3>
-            <div className="flex flex-wrap items-center gap-1.5 mt-1.5">
-              <span className="inline-flex items-center gap-1 font-mono text-xs text-zinc-600 bg-zinc-100 px-2 py-0.5 rounded-md">
-                <BarcodeIcon size={12} className="text-zinc-400" />
+            <div className="flex flex-wrap items-center gap-1.5 mt-2">
+              <span className="inline-flex items-center gap-1 font-mono text-xs text-slate-600 bg-slate-100 px-2.5 py-0.5 rounded-lg border-0">
+                <BarcodeIcon size={12} className="text-slate-400" />
                 {product.barcode}
               </span>
               {product.internalCode && (
-                <span className="inline-flex items-center gap-1 text-xs font-mono font-medium text-zinc-700 bg-zinc-100 px-2 py-0.5 rounded-md">
-                  <Tag size={11} className="text-zinc-400" />
+                <span className="inline-flex items-center gap-1 text-xs font-mono font-bold text-indigo-700 bg-indigo-50 px-2 py-0.5 rounded-lg border-0">
+                  <Tag size={11} className="text-indigo-400" />
                   #{product.internalCode}
                 </span>
               )}
               {product.destroyDaysBeforeExpiry ? (
-                <span className="text-[11px] font-medium text-amber-800 bg-amber-50 px-2 py-0.5 rounded-md border border-amber-200/60">
+                <span className="text-[11px] font-semibold text-amber-800 bg-amber-50 px-2.5 py-0.5 rounded-lg border-0">
                   Hủy trước: {product.destroyDaysBeforeExpiry} ngày
                 </span>
               ) : null}
@@ -65,11 +65,11 @@ export const ProductItem: React.FC<ProductItemProps> = React.memo(({
           </div>
 
           <div className="text-right shrink-0">
-            <span className="font-semibold text-zinc-900 text-sm sm:text-base block">
+            <span className="font-bold text-slate-900 text-sm sm:text-base block">
               {(product.price || 0).toLocaleString('vi-VN')} ₫
             </span>
             {urgentDate && (
-              <span className={`inline-block mt-1 text-[11px] font-medium px-2 py-0.5 rounded-full border ${urgentStatus.badgeCls}`}>
+              <span className={`inline-block mt-1 text-[11px] font-semibold px-2.5 py-0.5 rounded-full border-0 ${urgentStatus.badgeCls}`}>
                 {urgentStatus.shortTxt}
               </span>
             )}
@@ -77,8 +77,8 @@ export const ProductItem: React.FC<ProductItemProps> = React.memo(({
         </div>
 
         {records.length > 0 && (
-          <div className="mt-3 pt-2.5 border-t border-zinc-100 space-y-1.5">
-            <div className="text-[11px] font-medium text-zinc-400 uppercase tracking-wider flex items-center gap-1">
+          <div className="mt-3.5 pt-3 space-y-2">
+            <div className="text-[11px] font-semibold text-slate-400 uppercase tracking-wider flex items-center gap-1">
               <Calendar size={12} /> Lô hạn sử dụng ({records.length})
             </div>
             <div className="space-y-1.5 max-h-36 overflow-y-auto no-scrollbar">
@@ -87,32 +87,32 @@ export const ProductItem: React.FC<ProductItemProps> = React.memo(({
                 return (
                   <div 
                     key={rec.id} 
-                    className="flex items-center justify-between text-xs bg-zinc-50 border border-zinc-200/60 px-2.5 py-1.5 rounded-xl"
+                    className="flex items-center justify-between text-xs bg-slate-100/70 px-3 py-2 rounded-xl border-0"
                   >
                     <div className="min-w-0 flex-1">
-                      <div className="flex items-center gap-1.5 flex-wrap">
-                        <span className="font-medium text-zinc-700">HSD: {formatDate(rec.expDate)}</span>
-                        <span className="text-zinc-300">•</span>
-                        <span className="text-zinc-600">Hủy: {formatDate(rec.destructionDate)}</span>
+                      <div className="flex items-center gap-2 flex-wrap">
+                        <span className="font-semibold text-slate-700">HSD: {formatDate(rec.expDate)}</span>
+                        <span className="text-slate-300">•</span>
+                        <span className="text-slate-600">Hủy: {formatDate(rec.destructionDate)}</span>
                         {rec.quantity !== undefined && (
-                          <span className="font-semibold text-zinc-800 bg-white border border-zinc-200 px-1.5 rounded text-[11px]">
+                          <span className="font-bold text-slate-800 bg-white px-2 py-0.5 rounded-md text-[11px] shadow-2xs border-0">
                             SL: {rec.quantity}
                           </span>
                         )}
                       </div>
                       {rec.note && (
-                        <p className="text-[11px] text-zinc-500 mt-0.5 truncate">{rec.note}</p>
+                        <p className="text-[11px] text-slate-500 mt-0.5 truncate">{rec.note}</p>
                       )}
                     </div>
 
-                    <div className="flex items-center gap-1 ml-2 shrink-0">
-                      <span className={`text-[10px] font-medium px-1.5 py-0.5 rounded border ${recStatus.badgeCls}`}>
+                    <div className="flex items-center gap-1.5 ml-2 shrink-0">
+                      <span className={`text-[10px] font-semibold px-2 py-0.5 rounded-full border-0 ${recStatus.badgeCls}`}>
                         {recStatus.shortTxt}
                       </span>
                       <button
                         type="button"
                         onClick={() => onDeleteRecord(product, rec.id)}
-                        className="p-1 text-zinc-400 hover:text-red-600 rounded transition-colors cursor-pointer"
+                        className="p-1 text-slate-400 hover:text-rose-600 rounded-full hover:bg-rose-50 transition-colors cursor-pointer border-0"
                         title="Xóa đợt HSD này"
                       >
                         <Trash2 size={13} />
@@ -127,11 +127,11 @@ export const ProductItem: React.FC<ProductItemProps> = React.memo(({
       </div>
 
       <div>
-        <div className="mt-3 pt-2.5 border-t border-zinc-100 flex items-center justify-between gap-2">
+        <div className="mt-4 pt-3 flex items-center justify-between gap-2">
           <button
             type="button"
             onClick={() => onAddRecord(product)}
-            className="text-xs font-medium text-zinc-800 hover:bg-zinc-100 bg-zinc-50 px-3 py-1.5 rounded-xl transition-colors flex items-center gap-1 border border-zinc-200/80 cursor-pointer"
+            className="text-xs font-semibold text-blue-700 hover:bg-blue-100/80 bg-blue-50 px-3.5 py-1.5 rounded-full transition-all flex items-center gap-1 border-0 cursor-pointer shadow-apple-soft"
           >
             <CalendarPlus size={14} /> Thêm HSD
           </button>
@@ -140,14 +140,14 @@ export const ProductItem: React.FC<ProductItemProps> = React.memo(({
             <button 
               type="button"
               onClick={() => onEdit(product)}
-              className="text-xs font-medium text-zinc-600 hover:text-zinc-900 bg-zinc-50 hover:bg-zinc-100 px-2.5 py-1.5 rounded-xl transition-colors flex items-center gap-1 border border-zinc-200/80 cursor-pointer"
+              className="text-xs font-semibold text-slate-600 hover:text-slate-900 bg-slate-100 hover:bg-slate-200 px-3 py-1.5 rounded-full transition-all flex items-center gap-1 border-0 cursor-pointer"
             >
               <Edit2 size={13} /> Sửa
             </button>
             <button 
               type="button"
               onClick={() => onDelete(product)}
-              className="text-xs font-medium text-red-600 hover:bg-red-50 px-2.5 py-1.5 rounded-xl transition-colors flex items-center gap-1 border border-red-200/60 cursor-pointer"
+              className="text-xs font-semibold text-rose-600 hover:bg-rose-50 bg-rose-50/50 px-3 py-1.5 rounded-full transition-all flex items-center gap-1 border-0 cursor-pointer"
             >
               <Trash2 size={13} /> Xóa
             </button>
@@ -155,7 +155,7 @@ export const ProductItem: React.FC<ProductItemProps> = React.memo(({
         </div>
 
         {showBarcodeImage && product.barcode && product.barcode.length === 13 && (
-          <div className="mt-2.5 pt-2 border-t border-zinc-100 flex justify-center bg-zinc-50/50 rounded-xl overflow-hidden">
+          <div className="mt-3 pt-2.5 flex justify-center bg-slate-50/70 rounded-2xl overflow-hidden p-2">
             <Barcode 
               value={product.barcode} 
               format="EAN13" 
